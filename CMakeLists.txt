@@ -22,8 +22,16 @@ add_library(doomcore STATIC
 )
 target_include_directories(doomcore PUBLIC src)
 
+# Platform layer: SDL2 windowing + framebuffer presentation.
+find_package(SDL2 CONFIG REQUIRED)
+add_library(doomplatform STATIC
+    src/platform/i_video.cpp
+)
+target_include_directories(doomplatform PUBLIC src)
+target_link_libraries(doomplatform PUBLIC SDL2::SDL2 ${CMAKE_DL_LIBS})
+
 add_executable(doomcpp src/main.cpp)
-target_link_libraries(doomcpp PRIVATE doomcore)
+target_link_libraries(doomcpp PRIVATE doomcore doomplatform)
 
 include(FetchContent)
 FetchContent_Declare(
