@@ -8,14 +8,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(doomcpp src/main.cpp)
-target_include_directories(doomcpp PRIVATE src)
-
 if(MSVC)
-    target_compile_options(doomcpp PRIVATE /W4)
+    add_compile_options(/W4)
 else()
-    target_compile_options(doomcpp PRIVATE -Wall -Wextra -Wpedantic)
+    add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
+
+# Core engine library (types, math, RNG, error/log) -- no SDL, unit-testable.
+add_library(doomcore STATIC
+    src/core/i_system.cpp
+)
+target_include_directories(doomcore PUBLIC src)
+
+add_executable(doomcpp src/main.cpp)
+target_link_libraries(doomcpp PRIVATE doomcore)
 
 include(FetchContent)
 FetchContent_Declare(
