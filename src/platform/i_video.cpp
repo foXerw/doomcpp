@@ -74,6 +74,22 @@ bool pollEvents() {
     return true;
 }
 
+bool pollEvents(Input& input) {
+    const Uint8* kb = SDL_GetKeyboardState(nullptr);
+    input.forward     = kb[SDL_SCANCODE_W] || kb[SDL_SCANCODE_UP];
+    input.back        = kb[SDL_SCANCODE_S] || kb[SDL_SCANCODE_DOWN];
+    input.turnLeft    = kb[SDL_SCANCODE_LEFT];
+    input.turnRight   = kb[SDL_SCANCODE_RIGHT];
+    input.strafeLeft  = kb[SDL_SCANCODE_A];
+    input.strafeRight = kb[SDL_SCANCODE_D];
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) return false;
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) return false;
+    }
+    return true;
+}
+
 void shutdown() {
     if (g_texture)  SDL_DestroyTexture(g_texture);
     if (g_renderer) SDL_DestroyRenderer(g_renderer);

@@ -21,6 +21,7 @@ add_library(doomcore STATIC
     src/core/m_random.cpp
     src/wad/wadfile.cpp
     src/play/p_setup.cpp
+    src/render/r_draw.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 
