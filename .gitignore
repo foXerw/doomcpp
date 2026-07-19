@@ -1,0 +1,41 @@
+# Build
+build/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.obj
+
+# Compiled binaries
+*.exe
+*.app
+doomcpp
+doomcpp.*
+
+# Game assets (do not ship WADs)
+*.wad
+*.lmp
+assets/*.wad
+
+# IDE / editor
+.vscode/
+.idea/
+.vc/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+CMakeSettings.json
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# vcpkg
+vcpkg_installed/
