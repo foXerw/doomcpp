@@ -21,6 +21,9 @@ public:
     // Calls I_Error if not found.
     int getNumForName(const std::string& name) const;
 
+    std::vector<byte> readLump(int i);                      // cached after first read
+    std::vector<byte> readLumpByName(const std::string& name);
+
 private:
     struct LumpInfo {
         int  filepos;
@@ -31,4 +34,5 @@ private:
     std::ifstream         file_;
     std::string           magic_;
     std::vector<LumpInfo> lumps_;
+    std::vector<std::vector<byte>> cache_;   // index -> bytes, filled lazily
 };

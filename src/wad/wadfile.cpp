@@ -55,6 +55,7 @@ WadFile::WadFile(const std::string& path) {
         li.name[8] = '\0';
         lumps_.push_back(li);
     }
+    cache_.assign(static_cast<size_t>(numlumps), {});
 }
 
 std::string WadFile::lumpName(int i) const {
@@ -80,4 +81,22 @@ int WadFile::getNumForName(const std::string& name) const {
     int i = checkNumForName(name);
     if (i < 0) I_Error(std::string("WadFile::getNumForName: not found: ") + name);
     return i;
+}
+
+std::vector<byte> WadFile::readLump(int i) {
+    if (i < 0 || i >= numLumps()) I_Error("WadFile::readLump: out of range");
+    if (!cache_[i].empty()) return cache_[i];
+    const LumpInfo& li = lumps_[i];
+    std::vector<byte> buf(static_cast<size_t>(li.size));
+    if (li.size > 0) {
+        file_.seekg(li.filepos, std::ios::beg);
+        file_.read(reinterpret_cast<char*>(buf.data()), li.size);
+        if (!file_) I_Error(std::string("WadFile::readLump: short read on ") + li.name);
+    }
+    cache_[i] = buf;
+    return buf;
+}
+
+std::vector<byte> WadFile::readLumpByName(const std::string& name) {
+    return readLump(getNumForName(name));
 }

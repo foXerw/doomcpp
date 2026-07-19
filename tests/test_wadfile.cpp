@@ -48,3 +48,29 @@ TEST_CASE("WadFile parses header and directory") {
     CHECK(wad.lumpSize(1) == 7);
     std::remove(p.c_str());
 }
+
+TEST_CASE("WadFile name lookup is case-insensitive and backward") {
+    std::string p = make_test_wad();
+    WadFile wad(p);
+    CHECK(wad.checkNumForName("lumpone") == 0);   // lowercase query
+    CHECK(wad.checkNumForName("LUMPTWO") == 1);
+    CHECK(wad.checkNumForName("MISSING") == -1);
+    std::remove(p.c_str());
+}
+
+TEST_CASE("WadFile reads lump bytes") {
+    std::string p = make_test_wad();
+    WadFile wad(p);
+    auto b0 = wad.readLump(0);
+    CHECK(std::string(b0.begin(), b0.end()) == "hello");
+    auto b1 = wad.readLumpByName("LUMPTWO");
+    CHECK(std::string(b1.begin(), b1.end()) == "worlds!");
+    std::remove(p.c_str());
+}
+
+TEST_CASE("WadFile::getNumForName throws for missing lump") {
+    std::string p = make_test_wad();
+    WadFile wad(p);
+    CHECK_THROWS_AS(wad.getNumForName("NOPE"), std::runtime_error);
+    std::remove(p.c_str());
+}
