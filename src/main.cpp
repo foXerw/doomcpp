@@ -10,6 +10,7 @@
 #include "core/i_system.h"
 #include "platform/i_video.h"
 #include "play/p_setup.h"
+#include "render/r_bsp.h"
 #include "render/r_draw.h"
 #include "wad/wadfile.h"
 
@@ -28,6 +29,22 @@ int main(int argc, char** argv) {
                     std::cout << "  " << l << ": " << wad.lumpName(l)
                               << " (" << wad.lumpSize(l) << " bytes)\n";
                 }
+                return 0;
+            }
+            if (std::string(argv[i]) == "--dumpframe" && i + 2 < argc) {
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                float px, py, ang;
+                if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
+                if (i + 3 < argc) {  // optional DOOM-angle override (degrees)
+                    int a = std::atoi(argv[i + 3]);
+                    ang = (90.0f - static_cast<float>(a)) * 3.14159265f / 180.0f;
+                }
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                R_RenderView(fb.data(), FW, FH, map, px, py, ang, 41.0f);
+                writeBMP(argv[i + 2], fb.data(), FW, FH);
+                std::cout << "wrote " << argv[i + 2] << "\n";
                 return 0;
             }
         }

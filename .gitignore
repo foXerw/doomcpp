@@ -22,6 +22,10 @@ doomcpp.*
 *.lmp
 assets/*.wad
 
+# Render-dump artifacts (verification frames)
+*.bmp
+*.png
+
 # IDE / editor
 .vscode/
 .idea/
