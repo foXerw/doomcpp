@@ -17,6 +17,7 @@ endif()
 # Core engine library (types, math, RNG, error/log) -- no SDL, unit-testable.
 add_library(doomcore STATIC
     src/core/i_system.cpp
+    src/core/m_fixed.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 
