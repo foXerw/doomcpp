@@ -18,6 +18,7 @@ endif()
 add_library(doomcore STATIC
     src/core/i_system.cpp
     src/core/m_fixed.cpp
+    src/core/m_random.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 
