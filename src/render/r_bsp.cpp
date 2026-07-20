@@ -86,6 +86,7 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     x0 = std::max(0, x0); x1 = std::min(c.w - 1, x1);
 
     // resolve side + textures + sector
+    if (sg.linedef < 0 || sg.linedef >= static_cast<int>(m.lines.size())) return;
     const auto& L = m.lines[sg.linedef];
     int sideIdx = (sg.side == 0 || sg.side == 1) ? L.sidenum[sg.side] : -1;
     if (sideIdx < 0 || sideIdx >= static_cast<int>(m.sides.size())) return;
