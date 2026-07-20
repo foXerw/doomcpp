@@ -23,6 +23,7 @@ std::string upper(std::string s) {
 std::vector<std::string> parsePnames(const byte* d, size_t n) {
     if (n < 4) I_Error("parsePnames: too small");
     int count = rd_i32(d);
+    if (count < 0) I_Error("parsePnames: negative count");
     std::vector<std::string> out;
     out.reserve(count);
     for (int i = 0; i < count; ++i) {
@@ -42,6 +43,7 @@ Patch decodePatch(const byte* data, size_t n, const uint32_t* palette) {
     if (n < 8) return patch;
     int width  = rd_i16(data);
     int height = rd_i16(data + 2);
+    if (width < 0 || height < 0) I_Error("decodePatch: negative dimensions");
     patch.width = width;
     patch.height = height;
     patch.rgba.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0u);  // transparent
@@ -73,6 +75,7 @@ Patch decodePatch(const byte* data, size_t n, const uint32_t* palette) {
 std::vector<TextureDef> parseTextureDefs(const byte* d, size_t n) {
     if (n < 4) I_Error("parseTextureDefs: too small");
     int num = rd_i32(d);
+    if (num < 0) I_Error("parseTextureDefs: negative numtextures");
     std::vector<TextureDef> out;
     out.reserve(num);
     for (int i = 0; i < num; ++i) {
@@ -108,6 +111,7 @@ Texture compositeTexture(const TextureDef& def, const std::vector<Patch>& patche
     std::memcpy(t.name, def.name, 9);
     t.width = def.width;
     t.height = def.height;
+    if (def.width <= 0 || def.height <= 0) return t;
     t.rgba.assign(static_cast<size_t>(def.width) * static_cast<size_t>(def.height), 0u);
     for (const Mappatch& mp : def.patches) {
         if (mp.patch < 0 || mp.patch >= static_cast<int>(patches.size())) continue;

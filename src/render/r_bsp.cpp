@@ -29,6 +29,7 @@ int pointOnSide(float x, float y, const node_t& n) {
 // solid: spans full opening (one-sided). upper/lower: ceiling/floor-step walls. Updates clips for opaque parts.
 void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffset,
              int zTop, int zBot, int light, bool solid, bool upper, bool lower) {
+    if (T.width <= 0 || T.height <= 0 || T.rgba.empty()) return;
     float syTop = c.h / 2.0f - c.focal * (zTop - c.eyeZ) * scale;   // smaller y (wall top)
     float syBot = c.h / 2.0f - c.focal * (zBot - c.eyeZ) * scale;   // larger y  (wall bottom)
     int yA = std::max(static_cast<int>(std::ceil(syTop)),  c.ceilingClip[x] + 1);
@@ -109,7 +110,7 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     for (int x = x0; x <= x1; ++x) {
         if (c.ceilingClip[x] >= c.floorClip[x] - 1) continue;
         float sx = (x - c.w / 2.0f) / c.focal;
-        float denom = (r1o - r0o) - sx * (d1o - d0o);
+        float denom = (r1o - r0o) - sx * (d1o - d0o);   // ORIGINAL (un-near-clipped) endpoints — load-bearing for perspective-correct U
         if (std::fabs(denom) < 1e-9f) continue;
         float t = (sx * d0o - r0o) / denom;
         if (t < -0.001f || t > 1.001f) continue;
