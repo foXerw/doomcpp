@@ -11,6 +11,7 @@
 #include "platform/i_video.h"
 #include "play/p_setup.h"
 #include "render/r_bsp.h"
+#include "render/r_data.h"
 #include "render/r_draw.h"
 #include "wad/wadfile.h"
 
@@ -34,6 +35,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--dumpframe" && i + 2 < argc) {
                 WadFile wad(argv[i + 1]);
                 MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
                 float px, py, ang;
                 if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
                 if (i + 3 < argc) {  // optional DOOM-angle override (degrees)
@@ -42,7 +44,7 @@ int main(int argc, char** argv) {
                 }
                 constexpr int FW = 320, FH = 200;
                 std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
-                R_RenderView(fb.data(), FW, FH, map, px, py, ang, 41.0f);
+                R_RenderView(fb.data(), FW, FH, map, tex, px, py, ang, 41.0f);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
                 std::cout << "wrote " << argv[i + 2] << "\n";
                 return 0;
@@ -50,14 +52,15 @@ int main(int argc, char** argv) {
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P2b 3D)  WASD move, arrows turn, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P3a textured walls)  WASD move, arrows turn, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
+        TextureLookup tex(wad);
         float px, py, ang;
         if (!playerStart(map, px, py, ang)) { px = 0; py = 0; ang = 0; }
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - 3D")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - textured")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
         const float moveSpeed = 4.0f, turnSpeed = 0.04f;
@@ -72,7 +75,7 @@ int main(int argc, char** argv) {
             if (in.turnLeft)    ang += turnSpeed;
             if (in.turnRight)   ang -= turnSpeed;
 
-            R_RenderView(fb.data(), FB_W, FB_H, map, px, py, ang, 41.0f);
+            R_RenderView(fb.data(), FB_W, FB_H, map, tex, px, py, ang, 41.0f);
             i_video::present(fb.data());
         }
 

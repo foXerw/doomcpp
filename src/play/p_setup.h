@@ -7,9 +7,20 @@ class WadFile;   // fwd
 
 struct vertex_t    { fixed_t x, y; };
 struct line_t      { int v1, v2, flags, special, tag; int sidenum[2]; };
-struct sector_t    { int floorheight, ceilingheight; };
-struct side_t      { int sector; };
-struct seg_t       { int v1, v2, linedef, side, frontsector, backsector; };
+struct side_t      {
+    int  textureoffset;          // mapsidedef_t +0 (texel units)
+    int  rowoffset;              // +2
+    char toptexture[9];          // +4  (8 chars + NUL)
+    char bottomtexture[9];       // +12
+    char midtexture[9];          // +20
+    int  sector;                 // +28
+};
+struct sector_t    {
+    int  floorheight, ceilingheight;   // +0 / +2
+    char floorpic[9], ceilingpic[9];   // +4 / +12
+    int  lightlevel, special, tag;     // +20 / +22 / +24
+};
+struct seg_t       { int v1, v2, linedef, side, offset, frontsector, backsector; };
 struct subsector_t { int segcount, firstseg; };
 struct node_t      { float x, y, dx, dy; uint32_t children[2]; };
 struct thing_t     { int x, y, angleDeg, type; };
