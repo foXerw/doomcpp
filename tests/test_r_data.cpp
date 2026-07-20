@@ -30,21 +30,29 @@ TEST_CASE("parsePnames reads count + names") {
     CHECK(p[1] == "WALL2");
 }
 
-TEST_CASE("decodePatch decodes a 1x2 column with transparent gaps") {
-    // palette: index 3 = opaque red (R=0xAA,G=0xBB,B=0xCC -> RGBA (R<<24)|(G<<16)|(B<<8)|A)
+TEST_CASE("decodePatch leaves transparent gaps and forces opacity") {
+    // palette index 3 has alpha 0x00 — decodePatch must force it to 0xFF (opaque)
     std::vector<uint32_t> pal(256, 0);
-    pal[3] = (0xAAu << 24) | (0xBBu << 16) | (0xCCu << 8) | 0xFFu;
+    pal[3] = (0xAAu << 24) | (0xBBu << 16) | (0xCCu << 8) | 0x00u;   // alpha is ZERO on purpose
 
+    // 1x3 patch with a GAP row: post topdelta=0 len=1 (row 0), row 1 empty,
+    // then post topdelta=2 len=1 (row 2). Row 1 must stay transparent (0).
     std::vector<byte> b;
-    w16(b, 1); w16(b, 2); w16(b, 0); w16(b, 0);  // width,height,leftoffset,topoffset
-    w32(b, 12);                                   // columnofs[0] = 8 + 4*1 = 12
-    // column 0 @ offset 12: topdelta=0,length=2,pad,pix,pix,pad, 0xFF
-    w8(b, 0); w8(b, 2); w8(b, 0); w8(b, 3); w8(b, 3); w8(b, 0); w8(b, 0xFF);
+    w16(b, 1); w16(b, 3); w16(b, 0); w16(b, 0);   // width=1, height=3, leftoffset, topoffset
+    w32(b, 12);                                     // columnofs[0] = 8 + 4*1 = 12
+    // post A: topdelta=0, length=1, pad, pix=3, pad
+    w8(b, 0); w8(b, 1); w8(b, 0); w8(b, 3); w8(b, 0);
+    // post B: topdelta=2, length=1, pad, pix=3, pad
+    w8(b, 2); w8(b, 1); w8(b, 0); w8(b, 3); w8(b, 0);
+    w8(b, 0xFF);                                    // end of column
 
     Patch p = decodePatch(b.data(), b.size(), pal.data());
     CHECK(p.width == 1);
-    CHECK(p.height == 2);
-    REQUIRE(p.rgba.size() == 2);
-    CHECK(p.rgba[0] == pal[3]);
-    CHECK(p.rgba[1] == pal[3]);
+    CHECK(p.height == 3);
+    REQUIRE(p.rgba.size() == 3);
+    // rows 0 and 2 decoded from pal[3] with alpha FORCED to 0xFF despite pal[3] having alpha 0x00
+    CHECK(p.rgba[0] == (pal[3] | 0xFFu));
+    CHECK(p.rgba[2] == (pal[3] | 0xFFu));
+    // gap row 1 untouched -> transparent
+    CHECK(p.rgba[1] == 0u);
 }
