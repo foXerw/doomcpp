@@ -94,27 +94,40 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     const auto& sec = m.sectors[sg.frontsector];
     int fH = sec.floorheight, cH = sec.ceilingheight, light = sec.lightlevel;
 
-    const Texture* T = nullptr;
-    if (sg.backsector < 0) {
-        T = c.tex->wall(sd.midtexture);          // one-sided: middle texture
-    }
-    // (two-sided handled in Task 5)
-    if (!T) return;
-
     float texBaseU = static_cast<float>(sg.offset) + static_cast<float>(sd.textureoffset);
 
+    // Decide which wall parts exist.
+    bool twoSided = sg.backsector >= 0 && sg.backsector < static_cast<int>(m.sectors.size());
+    int  fH_f = fH, cH_f = cH;                       // front sector
+    int  fH_b = fH, cH_b = cH;                       // back sector (defaults if invalid)
+    if (twoSided) { fH_b = m.sectors[sg.backsector].floorheight; cH_b = m.sectors[sg.backsector].ceilingheight; }
+
+    const Texture* midT = c.tex->wall(sd.midtexture);
+    const Texture* topT = twoSided ? c.tex->wall(sd.toptexture) : nullptr;
+    const Texture* botT = twoSided ? c.tex->wall(sd.bottomtexture) : nullptr;
+
     for (int x = x0; x <= x1; ++x) {
-        if (c.ceilingClip[x] >= c.floorClip[x] - 1) continue;       // column fully occluded
-        float sx = (x - c.w / 2.0f) / c.focal;                      // right/depth for this column's ray
-        float denom = (r1o - r0o) - sx * (d1o - d0o);               // ORIGINAL endpoints
+        if (c.ceilingClip[x] >= c.floorClip[x] - 1) continue;
+        float sx = (x - c.w / 2.0f) / c.focal;
+        float denom = (r1o - r0o) - sx * (d1o - d0o);
         if (std::fabs(denom) < 1e-9f) continue;
-        float t = (sx * d0o - r0o) / denom;                         // param along original seg line
+        float t = (sx * d0o - r0o) / denom;
         if (t < -0.001f || t > 1.001f) continue;
         float depth = d0o + t * (d1o - d0o);
         if (depth <= nearZ) continue;
         float scale = 1.0f / depth;
         float U = texBaseU + t * segLen;
-        drawCol(c, x, scale, *T, U, sd.rowoffset, cH, fH, light, /*solid*/true, false, false);
+
+        if (!twoSided) {
+            if (midT) drawCol(c, x, scale, *midT, U, sd.rowoffset, cH_f, fH_f, light, /*solid*/true, false, false);
+        } else {
+            // upper wall (ceiling step): back ceiling higher than front
+            if (topT && cH_b > cH_f) drawCol(c, x, scale, *topT, U, sd.rowoffset, cH_b, cH_f, light, false, /*upper*/true, false);
+            // lower wall (floor step): back floor lower than front
+            if (botT && fH_b < fH_f) drawCol(c, x, scale, *botT, U, sd.rowoffset, fH_f, fH_b, light, false, false, /*lower*/true);
+            // masked middle (fences/grates): floats in the back opening; transparent pixels see through; no clip update
+            if (midT && cH_b > fH_b) drawCol(c, x, scale, *midT, U, sd.rowoffset, cH_b, fH_b, light, false, false, false);
+        }
     }
 }
 
