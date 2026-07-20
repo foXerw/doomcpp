@@ -1001,11 +1001,11 @@ git tag v0.5-p3a-textured-walls
 
 ## P3a Definition of Done
 
-- [ ] `side_t` (texture offsets + upper/middle/lower names), `sector_t` (lightlevel + floor/ceiling pics), `seg_t` (offset) parsed; unit tests cover them.
-- [ ] `r_data` decodes `PLAYPAL`/`PNAMES`/patches, parses `TEXTURE1` (+`TEXTURE2`), composites wall textures to RGBA; unit tests cover parse/decode/composite.
-- [ ] `R_RenderView` renders **textured** walls: one-sided middle, two-sided upper/lower/masked-middle; perspective-correct U (per-column ray-line `t`) and V (projection inverse); per-column `ceilingClip`/`floorClip` occlusion; sector-`lightlevel` brightness.
-- [ ] `--dumpframe` BMP (→ PNG) shows recognizable E1M1 wall textures with light variation.
-- [ ] First-person textured walkthrough of E1M1 works (WASD/arrows).
+- [x] `side_t` (texture offsets + upper/middle/lower names), `sector_t` (lightlevel + floor/ceiling pics), `seg_t` (offset) parsed; unit tests cover them.
+- [x] `r_data` decodes `PLAYPAL`/`PNAMES`/patches, parses `TEXTURE1` (+`TEXTURE2`), composites wall textures to RGBA; unit tests cover parse/decode/composite.
+- [x] `R_RenderView` renders **textured** walls: one-sided middle, two-sided upper/lower/masked-middle; perspective-correct U (per-column ray-line `t`) and V (projection inverse); per-column `ceilingClip`/`floorClip` occlusion; sector-`lightlevel` brightness.
+- [x] `--dumpframe` BMP (→ PNG) shows recognizable E1M1 wall textures with light variation.
+- [x] First-person textured walkthrough of E1M1 works (WASD/arrows).
 - [ ] All 28 unit tests pass. P3a merged to `main`, tagged `v0.5-p3a-textured-walls`.
 
 ## Next: P3b · Visplane 地板天花板
