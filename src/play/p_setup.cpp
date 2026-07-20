@@ -7,6 +7,14 @@ std::int16_t rd_i16(const byte* p) {
     return static_cast<std::int16_t>(
         static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8));
 }
+
+// Copy an 8-char WAD name (not necessarily NUL-terminated) into out[9],
+// NUL-terminating and trimming trailing spaces so std::string compares are clean.
+void rd_name(const byte* p, char out[9]) {
+    for (int i = 0; i < 8; ++i) out[i] = static_cast<char>(p[i]);
+    out[8] = '\0';
+    for (int i = 7; i >= 0 && out[i] == ' '; --i) out[i] = '\0';
+}
 }
 
 std::vector<vertex_t> parseVertexes(const byte* d, size_t n) {
@@ -39,8 +47,14 @@ std::vector<sector_t> parseSectors(const byte* d, size_t n) {
     if (n % 26) I_Error("parseSectors: bad size");
     std::vector<sector_t> out(n / 26);
     for (size_t i = 0; i < out.size(); ++i) {
-        out[i].floorheight   = rd_i16(d + i * 26);
-        out[i].ceilingheight = rd_i16(d + i * 26 + 2);
+        const byte* p = d + i * 26;
+        out[i].floorheight   = rd_i16(p);
+        out[i].ceilingheight = rd_i16(p + 2);
+        rd_name(p + 4,  out[i].floorpic);
+        rd_name(p + 12, out[i].ceilingpic);
+        out[i].lightlevel = rd_i16(p + 20);
+        out[i].special    = rd_i16(p + 22);
+        out[i].tag        = rd_i16(p + 24);
     }
     return out;
 }
@@ -49,7 +63,13 @@ std::vector<side_t> parseSidedefs(const byte* d, size_t n) {
     if (n % 30) I_Error("parseSidedefs: bad size");
     std::vector<side_t> out(n / 30);
     for (size_t i = 0; i < out.size(); ++i) {
-        out[i].sector = rd_i16(d + i * 30 + 28);   // sector is last field
+        const byte* p = d + i * 30;
+        out[i].textureoffset = rd_i16(p);
+        out[i].rowoffset     = rd_i16(p + 2);
+        rd_name(p + 4,  out[i].toptexture);
+        rd_name(p + 12, out[i].bottomtexture);
+        rd_name(p + 20, out[i].midtexture);
+        out[i].sector = rd_i16(p + 28);
     }
     return out;
 }
@@ -63,6 +83,7 @@ std::vector<seg_t> parseSegs(const byte* d, size_t n) {
         out[i].v2 = rd_i16(p + 2);
         out[i].linedef = rd_i16(p + 6);
         out[i].side    = rd_i16(p + 8);
+        out[i].offset  = rd_i16(p + 10);
         out[i].frontsector = -1;   // resolved in loadMap
         out[i].backsector  = -1;
     }
