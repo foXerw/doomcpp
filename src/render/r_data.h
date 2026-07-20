@@ -20,6 +20,12 @@ std::vector<std::string> parsePnames(const byte* d, size_t n);
 // Decode a patch lump to RGBA using a 256-entry palette (each = (R<<24)|(G<<16)|(B<<8)|A).
 Patch decodePatch(const byte* data, size_t n, const uint32_t* palette);
 
+struct Mappatch   { int originx, originy, patch; };          // patch = PNAMES index
+struct TextureDef { char name[9] = {0}; int width = 0, height = 0; std::vector<Mappatch> patches; };
+
+std::vector<TextureDef> parseTextureDefs(const byte* d, size_t n);  // one TEXTURE1/2 lump
+Texture compositeTexture(const TextureDef& def, const std::vector<Patch>& patches);  // patches[i] = PNAMES idx i
+
 class TextureLookup {
 public:
     explicit TextureLookup(const WadFile& wad);
