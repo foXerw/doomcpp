@@ -58,7 +58,50 @@ int R_CheckPlane(std::vector<Visplane>& vps, int idx, int start, int stop) {
 }
 
 // --- Stubs: implemented in Tasks 4-5 (empty now so the module links) ---
-void R_SetupPlaneTables(PlaneCtx&) {}
+void R_SetupPlaneTables(PlaneCtx& c) {
+    c.yslope.assign(c.h, 0.0f);
+    c.distscale.assign(c.w, 0.0f);
+    for (int y = 0; y < c.h; ++y) {
+        float dy = static_cast<float>(y) - c.h / 2.0f;
+        c.yslope[y] = (std::fabs(dy) < 1e-6f) ? INFINITY : c.focal / std::fabs(dy);
+    }
+    for (int x = 0; x < c.w; ++x)
+        c.distscale[x] = (x - c.w / 2.0f) / c.focal;
+}
 std::vector<std::tuple<int,int,int>> R_PlaneSpans(const Visplane&) { return {}; }
-void R_DrawSpan(PlaneCtx&, int, int, int, const Flat*, float, int, bool) {}
+void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
+                float planeheight, int light, bool sky) {
+    if (y < 0 || y >= c.h) return;
+    if (sky) {
+        for (int x = x1; x <= x2; ++x)
+            if (x >= 0 && x < c.w) c.fb[(size_t)y * c.w + x] = kSkyColor;
+        return;
+    }
+    if (!flat || flat->rgba.empty() || flat->width <= 0) return;
+    if (y == c.h / 2) return;                       // horizon: infinite distance
+    float dist = planeheight * c.yslope[y];
+    if (!std::isfinite(dist) || dist <= 0.0f) return;
+    float shade = R_DistanceShade(dist) * (light / 255.0f);
+    if (shade > 1.0f) shade = 1.0f;
+    const float r1 = c.distscale[std::clamp(x1, 0, c.w - 1)] * dist;
+    float wx = c.px + dist * c.sin + r1 * c.cos;
+    float wy = c.py + dist * c.cos - r1 * c.sin;
+    const float stepR = dist / c.focal;
+    const float stepX = stepR * c.cos;
+    const float stepY = -stepR * c.sin;
+    for (int x = x1; x <= x2; ++x) {
+        if (x >= 0 && x < c.w) {
+            int tx = static_cast<int>(std::floor(wx)) & 63;
+            int ty = static_cast<int>(std::floor(wy)) & 63;
+            uint32_t t = flat->rgba[(size_t)ty * flat->width + tx];
+            uint8_t rr = static_cast<uint8_t>((t >> 24 & 0xFF) * shade);
+            uint8_t gg = static_cast<uint8_t>((t >> 16 & 0xFF) * shade);
+            uint8_t bb = static_cast<uint8_t>((t >> 8  & 0xFF) * shade);
+            c.fb[(size_t)y * c.w + x] =
+                (static_cast<uint32_t>(rr) << 24) | (static_cast<uint32_t>(gg) << 16) |
+                (static_cast<uint32_t>(bb) << 8) | 0xFFu;
+        }
+        wx += stepX; wy += stepY;
+    }
+}
 void R_DrawPlanes(PlaneCtx&, std::vector<Visplane>&) {}
