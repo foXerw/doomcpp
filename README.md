@@ -4,7 +4,7 @@ A faithful, from-scratch reimplementation of the classic DOOM (1993) engine in
 modern C++17, using SDL2 for windowing/input/audio and software rendering
 matching the original renderer's algorithms.
 
-**Status:** P3a — textured walls (one-sided + two-sided upper/lower/masked-middle, sector-light modulation).
+**Status:** P3b — visplane floor/ceiling rendering (flats, F_SKY1 sky, distance darkening, animated flats).
 
 ## Roadmap
 
@@ -13,7 +13,8 @@ matching the original renderer's algorithms.
 - [x] P2a 地图加载 + 2D 自动地图 (vertexes/linedefs, player movement)
 - [x] P2b BSP 3D 墙渲染 (front-to-back, per-column occlusion)
 - [x] P3a 贴图墙 (PLAYPAL/PNAMES/patch decode, TEXTURE1/2 composite, perspective-correct U/V)
-- [ ] P3b Visplane 地板天花板
+- [x] P3b Visplane 地板天花板 (flats F_START/F_END, R_FindPlane/R_CheckPlane/R_PlaneSpans, float yslope/distscale, F_SKY1 sky, animated flats, distance shade)
+- [ ] P3c BLOCKMAP 碰撞 + 眼高随 sector floor
 
 ## Build (Windows)
 
