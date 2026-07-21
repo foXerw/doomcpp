@@ -32,6 +32,10 @@ Texture compositeTexture(const TextureDef& def, const std::vector<Patch>& patche
 // Decode a 4096-byte (64x64, row-major) flat lump to RGBA using a 256-entry palette.
 Flat decodeFlat(const byte* data, size_t n, const uint32_t* palette, const std::string& name);
 
+// Resolve an (possibly animated) flat name to its frame name at `tick`.
+// Known anim groups cycle; everything else returns the input unchanged.
+std::string resolveFlatFrame(const std::string& name, uint32_t tick);
+
 class TextureLookup {
 public:
     explicit TextureLookup(const WadFile& wad);
@@ -39,6 +43,10 @@ public:
     const Texture* wall(const std::string& name) const;
     // Case-insensitive; nullptr if no such flat.
     const Flat* flat(const std::string& name) const;
+    // True if `name` is the F_SKY1 sky marker (not a renderable flat).
+    static bool isSky(const std::string& name);
+    // Resolve `name` to its animated frame at `tick`, then look up the flat.
+    const Flat* flatForFrame(const std::string& name, uint32_t tick) const;
 private:
     std::array<uint32_t, 256> palette_{};
     std::unordered_map<std::string, int> wallIndex_;

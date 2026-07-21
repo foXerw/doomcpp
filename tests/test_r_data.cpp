@@ -135,3 +135,19 @@ TEST_CASE("decodeFlatAsFlat: 4096 bytes -> 64x64 row-major RGBA") {
     CHECK(f.rgba[5 * 64 + 0] == pal[5]);
     CHECK(std::string(f.name) == "FLOOR0_1");
 }
+
+TEST_CASE("TextureLookup::isSky recognizes F_SKY1 only") {
+    CHECK(TextureLookup::isSky("F_SKY1") == true);
+    CHECK(TextureLookup::isSky("FLOOR0_1") == false);
+    CHECK(TextureLookup::isSky("NUKAGE1") == false);
+}
+
+TEST_CASE("resolveFlatFrame cycles anim groups, leaves others") {
+    CHECK(resolveFlatFrame("NUKAGE1", 0) == "NUKAGE1");
+    CHECK(resolveFlatFrame("NUKAGE1", 1) == "NUKAGE2");
+    CHECK(resolveFlatFrame("NUKAGE1", 2) == "NUKAGE3");
+    CHECK(resolveFlatFrame("NUKAGE1", 3) == "NUKAGE1");   // wraps
+    CHECK(resolveFlatFrame("FWATER1", 5) == "FWATER2");   // 5 % 4 == 1
+    CHECK(resolveFlatFrame("FLOOR0_1", 9) == "FLOOR0_1"); // not animated
+    CHECK(resolveFlatFrame("F_SKY1", 3) == "F_SKY1");
+}

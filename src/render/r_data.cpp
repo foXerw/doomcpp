@@ -143,6 +143,29 @@ Flat decodeFlat(const byte* data, size_t n, const uint32_t* palette, const std::
     return f;
 }
 
+// DOOM animated flat groups (first frame -> ordered frames). Extend as needed.
+struct AnimGroup { const char* first; std::vector<std::string> frames; };
+static const std::vector<AnimGroup>& animGroups() {
+    static const std::vector<AnimGroup> g = {
+        {"NUKAGE1", {"NUKAGE1","NUKAGE2","NUKAGE3"}},
+        {"FWATER1", {"FWATER1","FWATER2","FWATER3","FWATER4"}},
+        {"BLOOD1",  {"BLOOD1","BLOOD2","BLOOD3"}},
+        {"LAVA1",   {"LAVA1","LAVA2","LAVA3","LAVA4"}},
+        {"SWATER1", {"SWATER1","SWATER2","SWATER3","SWATER4"}},
+    };
+    return g;
+}
+std::string resolveFlatFrame(const std::string& name, uint32_t tick) {
+    for (const auto& g : animGroups()) {
+        for (size_t i = 0; i < g.frames.size(); ++i) {
+            if (g.frames[i] == name) {
+                return g.frames[(i + tick) % g.frames.size()];
+            }
+        }
+    }
+    return name;
+}
+
 TextureLookup::TextureLookup(const WadFile& wad) {
     // PLAYPAL -> palette_ (first 256 entries; RGB -> RGBA opaque)
     auto pal = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
@@ -212,4 +235,12 @@ const Texture* TextureLookup::wall(const std::string& name) const {
 const Flat* TextureLookup::flat(const std::string& name) const {
     auto it = flatIndex_.find(upper(name));
     return it == flatIndex_.end() ? nullptr : &flats_[it->second];
+}
+
+bool TextureLookup::isSky(const std::string& name) {
+    return upper(name) == "F_SKY1";
+}
+
+const Flat* TextureLookup::flatForFrame(const std::string& name, uint32_t tick) const {
+    return flat(resolveFlatFrame(name, tick));
 }
