@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
                 }
                 constexpr int FW = 320, FH = 200;
                 std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
-                R_RenderView(fb.data(), FW, FH, map, tex, px, py, ang, 41.0f);
+                R_RenderView(fb.data(), FW, FH, map, tex, px, py, ang, 41.0f, 0);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
                 std::cout << "wrote " << argv[i + 2] << "\n";
                 return 0;
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P3a textured walls)  WASD move, arrows turn, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P3b visplanes)  WASD move, arrows turn, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
@@ -60,12 +60,13 @@ int main(int argc, char** argv) {
         if (!playerStart(map, px, py, ang)) { px = 0; py = 0; ang = 0; }
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - textured")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - visplanes")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
         const float moveSpeed = 4.0f, turnSpeed = 0.04f;
         Input in{};
         bool running = true;
+        uint32_t tick = 0;
         while (running) {
             running = i_video::pollEvents(in);
             if (in.forward)     { px += std::sin(ang) * moveSpeed; py += std::cos(ang) * moveSpeed; }
@@ -75,7 +76,7 @@ int main(int argc, char** argv) {
             if (in.turnLeft)    ang += turnSpeed;
             if (in.turnRight)   ang -= turnSpeed;
 
-            R_RenderView(fb.data(), FB_W, FB_H, map, tex, px, py, ang, 41.0f);
+            R_RenderView(fb.data(), FB_W, FB_H, map, tex, px, py, ang, 41.0f, tick++);
             i_video::present(fb.data());
         }
 
