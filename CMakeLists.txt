@@ -23,6 +23,7 @@ add_library(doomcore STATIC
     src/play/p_setup.cpp
     src/render/r_draw.cpp
     src/render/r_data.cpp
+    src/render/r_plane.cpp
     src/render/r_bsp.cpp
 )
 target_include_directories(doomcore PUBLIC src)
