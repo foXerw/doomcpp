@@ -4,8 +4,6 @@
 #include <cmath>
 #include <vector>
 
-using namespace std::string_literals;
-
 TEST_CASE("R_FindPlane merges coplanar, creates distinct") {
     int w = 16;
     std::vector<Visplane> vps;

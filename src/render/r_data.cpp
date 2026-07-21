@@ -144,14 +144,14 @@ Flat decodeFlat(const byte* data, size_t n, const uint32_t* palette, const std::
 }
 
 // DOOM animated flat groups (first frame -> ordered frames). Extend as needed.
-struct AnimGroup { const char* first; std::vector<std::string> frames; };
+struct AnimGroup { std::vector<std::string> frames; };
 static const std::vector<AnimGroup>& animGroups() {
     static const std::vector<AnimGroup> g = {
-        {"NUKAGE1", {"NUKAGE1","NUKAGE2","NUKAGE3"}},
-        {"FWATER1", {"FWATER1","FWATER2","FWATER3","FWATER4"}},
-        {"BLOOD1",  {"BLOOD1","BLOOD2","BLOOD3"}},
-        {"LAVA1",   {"LAVA1","LAVA2","LAVA3","LAVA4"}},
-        {"SWATER1", {"SWATER1","SWATER2","SWATER3","SWATER4"}},
+        {{"NUKAGE1","NUKAGE2","NUKAGE3"}},
+        {{"FWATER1","FWATER2","FWATER3","FWATER4"}},
+        {{"BLOOD1","BLOOD2","BLOOD3"}},
+        {{"LAVA1","LAVA2","LAVA3","LAVA4"}},
+        {{"SWATER1","SWATER2","SWATER3","SWATER4"}},
     };
     return g;
 }

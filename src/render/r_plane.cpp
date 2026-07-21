@@ -57,7 +57,6 @@ int R_CheckPlane(std::vector<Visplane>& vps, int idx, int start, int stop) {
     return static_cast<int>(vps.size() - 1);
 }
 
-// --- Stubs: implemented in Tasks 4-5 (empty now so the module links) ---
 void R_SetupPlaneTables(PlaneCtx& c) {
     c.yslope.assign(c.h, 0.0f);
     c.distscale.assign(c.w, 0.0f);
