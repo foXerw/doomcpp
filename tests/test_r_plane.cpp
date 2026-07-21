@@ -113,3 +113,28 @@ TEST_CASE("R_DrawSpan writes shaded flat texels and sky writes constant") {
     for (int x = 0; x < 8; ++x)
         CHECK(fb[1*8 + x] == kSkyColor);
 }
+
+// --- Task 5: R_PlaneSpans (row-run span enumeration) ---
+// NOTE: brief's name had a ';' ("runs; skips gaps") which is the CMake list
+// separator and breaks CTest discovery (Task 4 lesson) -> replaced with ','.
+TEST_CASE("R_PlaneSpans emits contiguous (y,x1,x2) runs, skips gaps/unclaimed") {
+    int w = 8;
+    Visplane pl; pl.minx = 0; pl.maxx = 5;
+    pl.top.assign(w, kOpenTop); pl.bottom.assign(w, kOpenBot);
+    // columns 0..2 cover rows 1..2; col 3 unclaimed (gap); col 4..5 cover rows 1..2
+    for (int x = 0; x <= 2; ++x) { pl.top[x] = 1; pl.bottom[x] = 2; }
+    for (int x = 4; x <= 5; ++x) { pl.top[x] = 1; pl.bottom[x] = 2; }
+    auto spans = R_PlaneSpans(pl);
+    // Expect, per row y=1 and y=2: run [0,2] and run [4,5] => 4 spans
+    REQUIRE(spans.size() == 4);
+    CHECK(std::get<0>(spans[0]) == 1); CHECK(std::get<1>(spans[0]) == 0); CHECK(std::get<2>(spans[0]) == 2);
+    CHECK(std::get<0>(spans[1]) == 1); CHECK(std::get<1>(spans[1]) == 4); CHECK(std::get<2>(spans[1]) == 5);
+    CHECK(std::get<0>(spans[2]) == 2); CHECK(std::get<1>(spans[2]) == 0); CHECK(std::get<2>(spans[2]) == 2);
+    CHECK(std::get<0>(spans[3]) == 2); CHECK(std::get<1>(spans[3]) == 4); CHECK(std::get<2>(spans[3]) == 5);
+}
+
+TEST_CASE("R_PlaneSpans: empty plane (minx>maxx) yields nothing") {
+    Visplane pl; pl.minx = 5; pl.maxx = -1;
+    pl.top.assign(8, kOpenTop); pl.bottom.assign(8, kOpenBot);
+    CHECK(R_PlaneSpans(pl).empty());
+}

@@ -68,7 +68,28 @@ void R_SetupPlaneTables(PlaneCtx& c) {
     for (int x = 0; x < c.w; ++x)
         c.distscale[x] = (x - c.w / 2.0f) / c.focal;
 }
-std::vector<std::tuple<int,int,int>> R_PlaneSpans(const Visplane&) { return {}; }
+std::vector<std::tuple<int,int,int>> R_PlaneSpans(const Visplane& pl) {
+    std::vector<std::tuple<int,int,int>> out;
+    if (pl.minx > pl.maxx) return out;
+    int ymax = -1;
+    for (int x = pl.minx; x <= pl.maxx; ++x)
+        if (pl.top[x] <= pl.bottom[x]) ymax = std::max(ymax, pl.bottom[x]);
+    for (int y = 0; y <= ymax; ++y) {
+        int x = pl.minx;
+        while (x <= pl.maxx) {
+            bool covered = (pl.top[x] <= y) && (y <= pl.bottom[x]); // unclaimed col: kOpenTop<=y false
+            if (covered) {
+                int x1 = x;
+                while (x + 1 <= pl.maxx && pl.top[x+1] <= y && y <= pl.bottom[x+1]) ++x;
+                out.emplace_back(y, x1, x);
+                ++x;
+            } else {
+                ++x;
+            }
+        }
+    }
+    return out;
+}
 void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
                 float planeheight, int light, bool sky) {
     if (y < 0 || y >= c.h) return;
@@ -104,4 +125,11 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
         wx += stepX; wy += stepY;
     }
 }
-void R_DrawPlanes(PlaneCtx&, std::vector<Visplane>&) {}
+void R_DrawPlanes(PlaneCtx& c, std::vector<Visplane>& vps) {
+    for (Visplane& pl : vps) {
+        if (pl.minx > pl.maxx) continue;
+        float planeheight = std::fabs(pl.height - c.eyeZ);
+        for (auto [y, x1, x2] : R_PlaneSpans(pl))
+            R_DrawSpan(c, y, x1, x2, pl.flat, planeheight, pl.lightlevel, pl.sky);
+    }
+}
