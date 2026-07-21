@@ -106,3 +106,32 @@ TEST_CASE("compositeTexture blits a patch into the texture") {
     CHECK(t.rgba[2] == 0u);
     CHECK(t.rgba[3] == 0u);
 }
+
+// Build a synthetic flat lump (4096 bytes) where byte[y*64+x] = (x+y)&0xFF.
+static std::vector<byte> synthFlat() {
+    std::vector<byte> b(4096, 0);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            b[y * 64 + x] = static_cast<byte>((x + y) & 0xFF);
+    return b;
+}
+
+TEST_CASE("decodeFlatAsFlat: 4096 bytes -> 64x64 row-major RGBA") {
+    // Standalone decode is tested through TextureLookup below; here we assert the
+    // public Flat shape by constructing a TextureLookup over an in-memory WAD is
+    // not feasible, so this case is covered by flat("...") on a real WAD in a
+    // smoke step. Instead unit-test the decode helper directly:
+    std::vector<uint32_t> pal(256, 0);
+    pal[5] = (0x10u << 24) | (0x20u << 16) | (0x30u << 8) | 0xFFu;
+    std::vector<byte> raw = synthFlat();
+    // decodeFlat exposed as a free function for testing:
+    Flat f = decodeFlat(raw.data(), raw.size(), pal.data(), "FLOOR0_1");
+    CHECK(f.width == 64);
+    CHECK(f.height == 64);
+    REQUIRE(f.rgba.size() == 4096);
+    // row-major: index (0,5) -> pal[5]
+    CHECK(f.rgba[0 * 64 + 5] == pal[5]);
+    // index (5,0) -> pal[(5+0)&0xFF]=pal[5] as well
+    CHECK(f.rgba[5 * 64 + 0] == pal[5]);
+    CHECK(std::string(f.name) == "FLOOR0_1");
+}

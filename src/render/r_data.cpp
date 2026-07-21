@@ -2,6 +2,7 @@
 #include "core/i_system.h"
 #include "wad/wadfile.h"
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -130,6 +131,18 @@ Texture compositeTexture(const TextureDef& def, const std::vector<Patch>& patche
     return t;
 }
 
+Flat decodeFlat(const byte* data, size_t n, const uint32_t* palette, const std::string& name) {
+    Flat f;
+    std::snprintf(f.name, sizeof(f.name), "%s", name.c_str());
+    f.width = 64; f.height = 64;
+    f.rgba.assign(64 * 64, 0u);
+    for (size_t i = 0; i < 4096 && i < n; ++i) {
+        byte idx = data[i];
+        f.rgba[i] = palette[idx] | 0xFFu;
+    }
+    return f;
+}
+
 TextureLookup::TextureLookup(const WadFile& wad) {
     // PLAYPAL -> palette_ (first 256 entries; RGB -> RGBA opaque)
     auto pal = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
@@ -173,9 +186,30 @@ TextureLookup::TextureLookup(const WadFile& wad) {
         walls_.push_back(compositeTexture(def, patches));
     }
     for (int i = 0; i < static_cast<int>(walls_.size()); ++i) wallIndex_[upper(walls_[i].name)] = i;
+
+    // Flats: lumps between F_START and F_END, size==4096, name != "F_SKY1".
+    bool inFlats = false;
+    for (int i = 0; i < const_cast<WadFile&>(wad).numLumps(); ++i) {
+        std::string nm = const_cast<WadFile&>(wad).lumpName(i);
+        if (nm == "F_START") { inFlats = true; continue; }
+        if (nm == "F_END")   { inFlats = false; continue; }
+        if (!inFlats) continue;
+        if (const_cast<WadFile&>(wad).lumpSize(i) != 4096) continue;
+        if (nm == "F_SKY1") continue;   // sky marker, not a flat
+        auto raw = const_cast<WadFile&>(wad).readLump(i);
+        if (raw.empty()) continue;
+        flats_.push_back(decodeFlat(raw.data(), raw.size(), palette_.data(), nm));
+    }
+    for (int i = 0; i < static_cast<int>(flats_.size()); ++i)
+        flatIndex_[upper(flats_[i].name)] = i;
 }
 
 const Texture* TextureLookup::wall(const std::string& name) const {
     auto it = wallIndex_.find(upper(name));
     return it == wallIndex_.end() ? nullptr : &walls_[it->second];
+}
+
+const Flat* TextureLookup::flat(const std::string& name) const {
+    auto it = flatIndex_.find(upper(name));
+    return it == flatIndex_.end() ? nullptr : &flats_[it->second];
 }
