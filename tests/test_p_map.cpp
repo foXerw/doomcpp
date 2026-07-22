@@ -58,3 +58,53 @@ TEST_CASE("P_CheckPosition: two-sided portal raises floor, keeps ok") {
     CHECK(pc.floorz == 8.0f);           // raised to back floor
     CHECK(pc.dropoffz == 0.0f);         // min(front 0, back 8)
 }
+
+TEST_CASE("P_TryMove: passable step commits and raises floorz") {
+    auto tm = buildTestMap(false, 8);   // back floor +8
+    Player p; p.x = 100; p.y = 100; p.floorz = 0;
+    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == true);
+    CHECK(p.x == 256.0f);
+    CHECK(p.y == 256.0f);
+    CHECK(p.floorz == 8.0f);            // adopted the stepped-up floor
+}
+
+TEST_CASE("P_TryMove: step too high (>24) is rejected") {
+    auto tm = buildTestMap(false, 32);  // back floor +32
+    Player p; p.x = 100; p.y = 100; p.floorz = 0;
+    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == false);
+    CHECK(p.x == 100.0f);               // unchanged
+    CHECK(p.y == 100.0f);
+}
+
+TEST_CASE("P_TryMove: dropoff >24 is rejected") {
+    auto tm = buildTestMap(false, -32); // back floor -32
+    Player p; p.x = 100; p.y = 100; p.floorz = 0;
+    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == false);
+    CHECK(p.x == 100.0f);
+}
+
+TEST_CASE("P_TryMove: one-sided wall rejected; open target accepted") {
+    auto tm = buildTestMap(true, 0);
+    Player p; p.x = 100; p.y = 100; p.floorz = 0;
+    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == false);   // into wall
+    CHECK(P_TryMove(tm.m, tm.bm, p, 64, 64) == true);      // open
+    CHECK(p.x == 64.0f);
+}
+
+TEST_CASE("P_TrySlide: fully blocked -> no move, returns false") {
+    auto tm = buildTestMap(true, 0);
+    Player p; p.x = 250; p.y = 200; p.floorz = 0;          // just left of wall at x=270
+    CHECK(P_TrySlide(tm.m, tm.bm, p, 30, 0) == false);     // +X into wall, no Y to slide
+    CHECK(p.x == 250.0f);
+    CHECK(p.y == 200.0f);
+}
+
+TEST_CASE("P_TrySlide: diagonal into wall slides along the perpendicular axis") {
+    auto tm = buildTestMap(true, 0);
+    Player p; p.x = 250; p.y = 200; p.floorz = 0;
+    // full (280,240) straddles wall -> blocked; X-only (280,200) straddles -> blocked;
+    // Y-only (250,240) is clear -> commits. Player ends at (250,240).
+    CHECK(P_TrySlide(tm.m, tm.bm, p, 30, 40) == true);
+    CHECK(p.x == 250.0f);              // X component eaten by wall
+    CHECK(p.y == 240.0f);              // Y component kept (slid along wall)
+}

@@ -46,8 +46,26 @@ PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, float x, float y)
     return pc;
 }
 
-// Stubs for Tasks 5-6 (so the file links now):
-bool P_TryMove(const MapData&, const Blockmap&, Player&, float, float) { return false; }
-bool P_TrySlide(const MapData&, const Blockmap&, Player&, float, float) { return false; }
+bool P_TryMove(const MapData& m, const Blockmap& bm, Player& p, float nx, float ny) {
+    PosCheck pc = P_CheckPosition(m, bm, nx, ny);
+    if (!pc.ok) return false;
+    if (pc.ceilingz - pc.floorz < PLAYERHEIGHT) return false;   // doesn't fit vertically
+    if (pc.ceilingz - p.floorz  < PLAYERHEIGHT) return false;   // not enough headroom at current z
+    if (pc.floorz   - p.floorz  > STEP_LIMIT)   return false;   // step up too high
+    if (pc.floorz   - pc.dropoffz > STEP_LIMIT) return false;   // would stand over a dropoff
+    p.x = nx; p.y = ny;
+    p.floorz = pc.floorz;
+    p.ceilingz = pc.ceilingz;
+    return true;
+}
+
+bool P_TrySlide(const MapData& m, const Blockmap& bm, Player& p, float dx, float dy) {
+    if (P_TryMove(m, bm, p, p.x + dx, p.y + dy)) return true;   // full move
+    if (dx != 0.0f && P_TryMove(m, bm, p, p.x + dx, p.y)) return true;   // X-only
+    if (dy != 0.0f && P_TryMove(m, bm, p, p.x, p.y + dy)) return true;   // Y-only
+    return false;
+}
+
+// Stubs for Task 6 (so the file links now):
 void P_CalcHeight(const MapData&, Player&) {}
 void P_MovePlayer(const MapData&, const Blockmap&, Player&, float, float, float) {}
