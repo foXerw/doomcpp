@@ -76,11 +76,12 @@ TEST_CASE("P_TryMove: step too high (>24) is rejected") {
     CHECK(p.y == 100.0f);
 }
 
-TEST_CASE("P_TryMove: dropoff >24 is rejected") {
-    auto tm = buildTestMap(false, -32); // back floor -32
+TEST_CASE("P_TryMove: dropoff allowed (player MF_DROPOFF-exempt, like vanilla)") {
+    auto tm = buildTestMap(false, -32);   // back floor -32 (a dropoff)
     Player p; p.x = 100; p.y = 100; p.floorz = 0;
-    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == false);
-    CHECK(p.x == 100.0f);
+    CHECK(P_TryMove(tm.m, tm.bm, p, 256, 256) == true);   // vanilla player walks off ledges
+    CHECK(p.x == 256.0f);
+    CHECK(p.floorz == 0.0f);   // point (256,256) is in sector A (floor 0); opening bottom = max(0,-32) = 0
 }
 
 TEST_CASE("P_TryMove: one-sided wall rejected; open target accepted") {

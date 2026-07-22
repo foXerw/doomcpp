@@ -8,7 +8,7 @@
 class WadFile;   // fwd
 
 // Node child encodings + blockmap geometry (from r_main.c / p_local.h).
-constexpr uint32_t NF_SUBSECTOR = 0x8000;   // low bit of a node child marks a subsector leaf
+constexpr uint32_t NF_SUBSECTOR = 0x8000;   // high bit (0x8000) of a node child marks a subsector leaf
 constexpr int MAPBLOCK = 128;               // blockmap cell size in map units (MAPBLOCKUNITS)
 // linedef flags (doomdata.h)
 constexpr int ML_BLOCKING      = 1;

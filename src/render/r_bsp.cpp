@@ -131,7 +131,7 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         markFloor = (fH_f <  fH_b) || (fH_f == fH_b && (floorPicDiff || light != lightB));
         if (cH_b <= fH_f || fH_b >= cH_f) { markCeil = markFloor = true; }  // closed door
     }
-    if (fH_f >= static_cast<int>(c.eyeZ)) markFloor = false;            // floor above view
+    if (fH_f >= static_cast<int>(c.eyeZ) && !skyFloorF) markFloor = false;  // floor above view (sky always)
     if (cH_f <= static_cast<int>(c.eyeZ) && !skyCeilF) markCeil = false; // ceiling below view
 
     int ceilPlane = -1, floorPlane = -1;

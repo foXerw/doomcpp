@@ -52,7 +52,9 @@ bool P_TryMove(const MapData& m, const Blockmap& bm, Player& p, float nx, float 
     if (pc.ceilingz - pc.floorz < PLAYERHEIGHT) return false;   // doesn't fit vertically
     if (pc.ceilingz - p.floorz  < PLAYERHEIGHT) return false;   // not enough headroom at current z
     if (pc.floorz   - p.floorz  > STEP_LIMIT)   return false;   // step up too high
-    if (pc.floorz   - pc.dropoffz > STEP_LIMIT) return false;   // would stand over a dropoff
+    // Vanilla gates the dropoff check on !(flags & MF_DROPOFF); MT_PLAYER carries MF_DROPOFF,
+    // so the player is EXEMPT and may walk off ledges of any height. Dropoff is intentionally
+    // allowed here. (dropoffz is still tracked in P_CheckPosition for monster AI in P6.)
     p.x = nx; p.y = ny;
     p.floorz = pc.floorz;
     p.ceilingz = pc.ceilingz;
