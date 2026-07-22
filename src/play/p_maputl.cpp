@@ -28,7 +28,47 @@ int sectorOf(const MapData& m, int subsectorIdx) {
     return -1;
 }
 
-// Stubs for Task 3 (so the file links now):
-int P_BoxOnLineSide(const BBox&, float, float, float, float) { return -1; }
-Opening P_LineOpening(const MapData&, const line_t&) { return Opening{}; }
-std::vector<int> blockLinesInCell(const Blockmap&, int, int) { return {}; }
+int P_BoxOnLineSide(const BBox& bb, float x1, float y1, float x2, float y2) {
+    float dx = x2 - x1, dy = y2 - y1;
+    auto side = [&](float px, float py) -> int {
+        float cross = dx * (py - y1) - dy * (px - x1);
+        return (cross < 0.0f) ? 1 : 0;     // >= 0 -> front (on-line counts as front)
+    };
+    int s = side(bb.left, bb.bottom);
+    if (s != side(bb.right, bb.bottom)) return -1;
+    if (s != side(bb.left, bb.top))     return -1;
+    if (s != side(bb.right, bb.top))    return -1;
+    return s;   // all four corners agree; -1 above means straddle
+}
+
+Opening P_LineOpening(const MapData& m, const line_t& L) {
+    Opening o;
+    if (L.sidenum[0] < 0 || L.sidenum[0] >= static_cast<int>(m.sides.size())) return o;
+    int frontSec = m.sides[L.sidenum[0]].sector;
+    if (frontSec < 0 || frontSec >= static_cast<int>(m.sectors.size())) return o;
+    if (L.sidenum[1] < 0 || L.sidenum[1] >= static_cast<int>(m.sides.size())) return o;  // one-sided
+    int backSec = m.sides[L.sidenum[1]].sector;
+    if (backSec < 0 || backSec >= static_cast<int>(m.sectors.size())) return o;
+    float fH_f = static_cast<float>(m.sectors[frontSec].floorheight);
+    float cH_f = static_cast<float>(m.sectors[frontSec].ceilingheight);
+    float fH_b = static_cast<float>(m.sectors[backSec].floorheight);
+    float cH_b = static_cast<float>(m.sectors[backSec].ceilingheight);
+    o.top      = std::fmin(cH_f, cH_b);
+    o.bottom   = std::fmax(fH_f, fH_b);
+    o.lowfloor = std::fmin(fH_f, fH_b);
+    o.range    = o.top - o.bottom;
+    return o;
+}
+
+std::vector<int> blockLinesInCell(const Blockmap& bm, int cx, int cy) {
+    std::vector<int> out;
+    if (cx < 0 || cy < 0 || cx >= bm.width || cy >= bm.height) return out;
+    int offset = bm.lump[4 + cy * bm.width + cx];
+    if (offset < 0 || offset >= static_cast<int>(bm.lump.size())) return out;
+    for (int i = offset; i < static_cast<int>(bm.lump.size()); ++i) {
+        std::int16_t v = bm.lump[i];
+        if (v == -1) break;
+        out.push_back(v);
+    }
+    return out;
+}
