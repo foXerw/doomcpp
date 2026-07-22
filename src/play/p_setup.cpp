@@ -128,6 +128,24 @@ std::vector<thing_t> parseThings(const byte* d, size_t n) {
     return out;
 }
 
+Blockmap parseBlockmap(const byte* d, size_t n) {
+    Blockmap bm;
+    size_t count = n / 2;
+    bm.lump.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        std::uint16_t lo = d[i * 2];
+        std::uint16_t hi = d[i * 2 + 1];
+        bm.lump[i] = static_cast<std::int16_t>(lo | (hi << 8));
+    }
+    if (count >= 4) {
+        bm.orgx   = bm.lump[0];
+        bm.orgy   = bm.lump[1];
+        bm.width  = bm.lump[2];
+        bm.height = bm.lump[3];
+    }
+    return bm;
+}
+
 bool playerStart(const MapData& m, float& x, float& y, float& ang) {
     for (const auto& t : m.things) {
         if (t.type == 1) {   // player 1 start
@@ -162,6 +180,8 @@ MapData loadMap(const WadFile& wad, const std::string& mapname) {
     auto nd = bytes(7); m.nodes      = nd.empty() ? std::vector<node_t>{}      : parseNodes(nd.data(), nd.size());
     auto sc = bytes(8); m.sectors    = sc.empty() ? std::vector<sector_t>{}    : parseSectors(sc.data(), sc.size());
     auto th = bytes(1); m.things     = th.empty() ? std::vector<thing_t>{}     : parseThings(th.data(), th.size());
+    auto bm = bytes(10);  // ML_BLOCKMAP
+    m.blockmap = bm.empty() ? Blockmap{} : parseBlockmap(bm.data(), bm.size());
 
     // Resolve each seg's front/back sector via linedef -> sidedef -> sector.
     for (auto& s : m.segs) {

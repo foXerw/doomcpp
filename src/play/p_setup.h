@@ -1,12 +1,22 @@
 #pragma once
+#include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include "core/doomtype.h"
 
 class WadFile;   // fwd
 
+// Node child encodings + blockmap geometry (from r_main.c / p_local.h).
+constexpr uint32_t NF_SUBSECTOR = 0x8000;   // low bit of a node child marks a subsector leaf
+constexpr int MAPBLOCK = 128;               // blockmap cell size in map units (MAPBLOCKUNITS)
+// linedef flags (doomdata.h)
+constexpr int ML_BLOCKING      = 1;
+constexpr int ML_BLOCKMONSTERS = 2;
+constexpr int ML_TWOSIDED      = 4;
+
 struct vertex_t    { fixed_t x, y; };
-struct line_t      { int v1, v2, flags, special, tag; int sidenum[2]; };
+struct line_t      { int v1, v2, flags, special, tag; int sidenum[2]; mutable int validcount = 0; };
 struct side_t      {
     int  textureoffset;          // mapsidedef_t +0 (texel units)
     int  rowoffset;              // +2
@@ -25,6 +35,15 @@ struct subsector_t { int segcount, firstseg; };
 struct node_t      { float x, y, dx, dy; uint32_t children[2]; };
 struct thing_t     { int x, y, angleDeg, type; };
 
+// Parsed BLOCKMAP (p_setup.c::P_LoadBlockMap). lump holds the raw int16 stream:
+// header [orgx,orgy,width,height] then per-cell offsets then -1-terminated line lists.
+struct Blockmap {
+    int orgx = 0, orgy = 0;        // origin in map units (may be negative)
+    int width = 0, height = 0;     // cell counts
+    std::vector<std::int16_t> lump;
+};
+Blockmap parseBlockmap(const byte* d, size_t n);
+
 struct MapData {
     std::vector<vertex_t>    vertices;
     std::vector<line_t>      lines;
@@ -34,6 +53,7 @@ struct MapData {
     std::vector<subsector_t> subsectors;
     std::vector<node_t>      nodes;
     std::vector<thing_t>     things;
+    Blockmap blockmap;
 };
 
 // Pure parsers (on-disk LE short structs from doomdata.h).
