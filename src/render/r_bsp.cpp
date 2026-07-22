@@ -116,6 +116,7 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     const char* ceilPicF = sec.ceilingpic;
     const char* floorPicF = sec.floorpic;
     bool skyCeilF = TextureLookup::isSky(ceilPicF);
+    bool skyFloorF = TextureLookup::isSky(floorPicF);
     const char* ceilPicB = twoSided ? m.sectors[sg.backsector].ceilingpic : ceilPicF;
     const char* floorPicB = twoSided ? m.sectors[sg.backsector].floorpic : floorPicF;
     int lightB = twoSided ? m.sectors[sg.backsector].lightlevel : light;
@@ -140,8 +141,8 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         ceilPlane = R_CheckPlane(c.vps, ceilPlane, x0, x1);
     }
     if (markFloor) {
-        const Flat* ff = c.tex->flatForFrame(floorPicF, c.tick);
-        floorPlane = R_FindPlane(c.vps, static_cast<float>(fH_f), ff, light, false, c.w);
+        const Flat* ff = skyFloorF ? nullptr : c.tex->flatForFrame(floorPicF, c.tick);
+        floorPlane = R_FindPlane(c.vps, static_cast<float>(fH_f), ff, light, skyFloorF, c.w);
         floorPlane = R_CheckPlane(c.vps, floorPlane, x0, x1);
     }
 
