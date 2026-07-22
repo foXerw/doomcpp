@@ -66,6 +66,27 @@ bool P_TrySlide(const MapData& m, const Blockmap& bm, Player& p, float dx, float
     return false;
 }
 
-// Stubs for Task 6 (so the file links now):
-void P_CalcHeight(const MapData&, Player&) {}
-void P_MovePlayer(const MapData&, const Blockmap&, Player&, float, float, float) {}
+void P_CalcHeight(const MapData& m, Player& p) {
+    if (p.sector < 0 || p.sector >= static_cast<int>(m.sectors.size())) return;
+    float target = static_cast<float>(m.sectors[p.sector].floorheight) + VIEWHEIGHT;
+    p.viewz += (target - p.viewz) * 0.125f;                    // ~vanilla deltaviewheight >> 3
+    float cap = static_cast<float>(m.sectors[p.sector].ceilingheight) - 4.0f;
+    if (p.viewz > cap) p.viewz = cap;
+}
+
+void P_MovePlayer(const MapData& m, const Blockmap& bm, Player& p,
+                  float forward, float strafe, float turn) {
+    p.angle += turn;
+    float fs = std::sin(p.angle), fc = std::cos(p.angle);
+    // forwardVec=(sin,cos), rightVec=(cos,-sin)  (camera basis from P2a)
+    float dx = fs * forward + fc * strafe;
+    float dy = fc * forward - fs * strafe;
+    float mag = std::sqrt(dx * dx + dy * dy);
+    if (mag > MAXMOVE) { dx *= MAXMOVE / mag; dy *= MAXMOVE / mag; }
+    P_TrySlide(m, bm, p, dx, dy);
+    int ss = R_PointInSubsector(m, p.x, p.y);
+    p.subsector = ss;
+    p.sector = sectorOf(m, ss);
+    if (p.sector >= 0) p.floorz = static_cast<float>(m.sectors[p.sector].floorheight);
+    P_CalcHeight(m, p);
+}

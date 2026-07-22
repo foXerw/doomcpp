@@ -108,3 +108,50 @@ TEST_CASE("P_TrySlide: diagonal into wall slides along the perpendicular axis") 
     CHECK(p.x == 250.0f);              // X component eaten by wall
     CHECK(p.y == 240.0f);              // Y component kept (slid along wall)
 }
+
+TEST_CASE("P_CalcHeight: viewz approaches floor+VIEWHEIGHT, clamped under ceiling") {
+    MapData m;
+    sector_t s; s.floorheight = 0; s.ceilingheight = 40; m.sectors.push_back(s);  // low ceiling
+    Player p; p.sector = 0; p.viewz = 0;
+    // target = 0+41 = 41, but ceiling-4 = 36 -> clamp. The 0.125/tic smoothing converges
+    // toward 41 but is clamped at the cap; after enough tics viewz sticks at 36 (a single
+    // tic from viewz=0 only reaches 5.125, so the clamp must be observed at steady state).
+    for (int i = 0; i < 40; ++i) P_CalcHeight(m, p);
+    CHECK(p.viewz == doctest::Approx(36.0f));
+}
+
+TEST_CASE("P_CalcHeight: viewz converges to floor+VIEWHEIGHT over several tics") {
+    MapData m;
+    sector_t s; s.floorheight = 100; s.ceilingheight = 1000; m.sectors.push_back(s);
+    Player p; p.sector = 0; p.viewz = 100;   // starts at floor, target = 141
+    for (int i = 0; i < 40; ++i) P_CalcHeight(m, p);
+    CHECK(p.viewz == doctest::Approx(141.0f).epsilon(0.01f));
+    // monotonic approach
+    Player q; q.sector = 0; q.viewz = 100;
+    float prev = q.viewz;
+    for (int i = 0; i < 5; ++i) { P_CalcHeight(m, q); CHECK(q.viewz >= prev); prev = q.viewz; }
+}
+
+TEST_CASE("P_MovePlayer: forward in open space moves + re-sectors + keeps viewz near target") {
+    auto tm = buildTestMap(true, 0);
+    Player p; p.x = 64; p.y = 64; p.angle = 0; p.floorz = 0; p.viewz = 41; p.sector = 0;
+    // angle 0 -> forwardVec=(sin0,cos0)=(0,1): +Y. A small forward nudge stays in open space.
+    P_MovePlayer(tm.m, tm.bm, p, /*fwd*/5, /*str*/0, /*turn*/0);
+    CHECK(p.y > 64.0f);
+    CHECK(p.x == 64.0f);
+    CHECK(p.sector == 0);
+    CHECK(p.viewz == doctest::Approx(41.0f).epsilon(0.01f));
+}
+
+TEST_CASE("P_MovePlayer: walking into a wall does not cross it") {
+    auto tm = buildTestMap(true, 0);
+    Player p; p.x = 250; p.y = 200; p.angle = 0; p.floorz = 0; p.viewz = 41; p.sector = 0;
+    P_MovePlayer(tm.m, tm.bm, p, /*fwd*/30, 0, 0);   // forward +Y away from wall -> fine
+    CHECK(p.y > 200.0f);
+    // now face the wall (+X): angle so forwardVec ~ (+1,0). angle=PI/2 -> (sin,cos)=(1,0).
+    p.angle = 3.14159265f / 2.0f;
+    float before = p.x;
+    P_MovePlayer(tm.m, tm.bm, p, 30, 0, 0);          // tries to step into wall at x=270
+    CHECK(p.x < 270.0f);                              // did not cross the wall
+    CHECK(p.x >= before);                             // may have slid/none; never past wall
+}
