@@ -10,6 +10,8 @@
 #include "core/i_system.h"
 #include "platform/i_video.h"
 #include "play/p_setup.h"
+#include "play/p_maputl.h"
+#include "play/p_map.h"
 #include "render/r_bsp.h"
 #include "render/r_data.h"
 #include "render/r_draw.h"
@@ -44,7 +46,10 @@ int main(int argc, char** argv) {
                 }
                 constexpr int FW = 320, FH = 200;
                 std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
-                R_RenderView(fb.data(), FW, FH, map, tex, px, py, ang, 41.0f, 0);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                float eyeZ0 = (sec0 >= 0 ? static_cast<float>(map.sectors[sec0].floorheight) : 0.0f) + VIEWHEIGHT;
+                R_RenderView(fb.data(), FW, FH, map, tex, px, py, ang, eyeZ0, 0);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
                 std::cout << "wrote " << argv[i + 2] << "\n";
                 return 0;
@@ -52,31 +57,43 @@ int main(int argc, char** argv) {
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P3b visplanes)  WASD move, arrows turn, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P3c collision)  WASD move, arrows turn, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
-        float px, py, ang;
-        if (!playerStart(map, px, py, ang)) { px = 0; py = 0; ang = 0; }
+        float sx, sy, sang;
+        if (!playerStart(map, sx, sy, sang)) { sx = 0; sy = 0; sang = 0; }
+
+        Player p;
+        p.x = sx; p.y = sy; p.angle = sang;
+        {   int ss = R_PointInSubsector(map, p.x, p.y); p.subsector = ss; p.sector = sectorOf(map, ss);
+            p.floorz = (p.sector >= 0) ? static_cast<float>(map.sectors[p.sector].floorheight) : 0.0f;
+            p.viewz  = p.floorz + VIEWHEIGHT; }
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - visplanes")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - collision")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
-        const float moveSpeed = 4.0f, turnSpeed = 0.04f;
+        const float moveSpeed = 5.0f, turnSpeed = 0.07f;   // per 35Hz tic; tunable
+        constexpr uint32_t TIC_MS = 1000 / 35;             // 28 ms
         Input in{};
         bool running = true;
-        uint32_t tick = 0;
+        uint32_t prev = SDL_GetTicks();
+        uint32_t acc = 0;
+        uint32_t ticCount = 0;
         while (running) {
             running = i_video::pollEvents(in);
-            if (in.forward)     { px += std::sin(ang) * moveSpeed; py += std::cos(ang) * moveSpeed; }
-            if (in.back)        { px -= std::sin(ang) * moveSpeed; py -= std::cos(ang) * moveSpeed; }
-            if (in.strafeLeft)  { px += std::cos(ang) * moveSpeed; py -= std::sin(ang) * moveSpeed; }
-            if (in.strafeRight) { px -= std::cos(ang) * moveSpeed; py += std::sin(ang) * moveSpeed; }
-            if (in.turnLeft)    ang += turnSpeed;
-            if (in.turnRight)   ang -= turnSpeed;
-
-            R_RenderView(fb.data(), FB_W, FB_H, map, tex, px, py, ang, 41.0f, tick++);
+            uint32_t now = SDL_GetTicks();
+            acc += (now - prev);
+            prev = now;
+            for (int n = 0; n < 4 && acc >= TIC_MS; ++n, acc -= TIC_MS) {   // cap 4 tics/frame
+                float fwd = (in.forward ? 1.0f : 0.0f) - (in.back ? 1.0f : 0.0f);
+                float str = (in.strafeRight ? 1.0f : 0.0f) - (in.strafeLeft ? 1.0f : 0.0f);
+                float trn = (in.turnLeft ? 1.0f : 0.0f) - (in.turnRight ? 1.0f : 0.0f);
+                P_MovePlayer(map, map.blockmap, p, fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                ++ticCount;
+            }
+            R_RenderView(fb.data(), FB_W, FB_H, map, tex, p.x, p.y, p.angle, p.viewz, ticCount);
             i_video::present(fb.data());
         }
 

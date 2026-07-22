@@ -118,3 +118,34 @@ TEST_CASE("parseSegs reads offset field") {
     CHECK(s[0].linedef == 1);
     CHECK(s[0].offset == 42);
 }
+
+TEST_CASE("parseBlockmap reads header + cell line lists") {
+    // header [orgx=0, orgy=0, width=2, height=2]; cell (0,0) lists lines {5,7}; others empty.
+    // lump layout (int16 indices): 0..3 header; 4..7 cell offsets; 8 = empty terminator [-1];
+    // 9..11 = list [5, 7, -1].  cell linear index = cy*width+cx; offset index = 4 + linear.
+    std::vector<byte> b;
+    w16(b, 0);  w16(b, 0);  w16(b, 2);  w16(b, 2);   // header
+    w16(b, 9);                                            // cell (0,0) -> offset 9
+    w16(b, 8); w16(b, 8); w16(b, 8);                     // cells (1,0),(0,1),(1,1) -> empty
+    w16(b, -1);                                           // index 8: empty terminator
+    w16(b, 5); w16(b, 7); w16(b, -1);                    // index 9..11: list [5,7,-1]
+    Blockmap bm = parseBlockmap(b.data(), b.size());
+    CHECK(bm.orgx == 0);
+    CHECK(bm.orgy == 0);
+    CHECK(bm.width == 2);
+    CHECK(bm.height == 2);
+    REQUIRE((int)bm.lump.size() == 12);
+    CHECK(bm.lump[9] == 5);      // first line index in cell (0,0)'s list
+    CHECK(bm.lump[10] == 7);
+    CHECK(bm.lump[11] == -1);    // terminator
+}
+
+TEST_CASE("parseBlockmap handles negative origin") {
+    std::vector<byte> b;
+    w16(b, -2000); w16(b, -512); w16(b, 10); w16(b, 8);   // header: origin (-2000,-512), 10x8
+    Blockmap bm = parseBlockmap(b.data(), b.size());
+    CHECK(bm.orgx == -2000);
+    CHECK(bm.orgy == -512);
+    CHECK(bm.width == 10);
+    CHECK(bm.height == 8);
+}
