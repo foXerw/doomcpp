@@ -70,7 +70,10 @@ bool P_TrySlide(const MapData& m, const Blockmap& bm, Player& p, float dx, float
 
 void P_CalcHeight(const MapData& m, Player& p) {
     if (p.sector < 0 || p.sector >= static_cast<int>(m.sectors.size())) return;
-    float target = static_cast<float>(m.sectors[p.sector].floorheight) + VIEWHEIGHT;
+    // Eye-height target tracks p.floorz (the bbox opening floor = vanilla tmfloorz), NOT the
+    // floor under the player's center point. Using the point-sector floor left the eye at the
+    // wrong height on/around steps, so the floor clipped into view. P3d fix.
+    float target = p.floorz + VIEWHEIGHT;
     p.viewz += (target - p.viewz) * 0.125f;                    // ~vanilla deltaviewheight >> 3
     float cap = static_cast<float>(m.sectors[p.sector].ceilingheight) - 4.0f;
     if (p.viewz > cap) p.viewz = cap;
@@ -85,10 +88,13 @@ void P_MovePlayer(const MapData& m, const Blockmap& bm, Player& p,
     float dy = fc * forward - fs * strafe;
     float mag = std::sqrt(dx * dx + dy * dy);
     if (mag > MAXMOVE) { dx *= MAXMOVE / mag; dy *= MAXMOVE / mag; }
-    P_TrySlide(m, bm, p, dx, dy);
+    P_TrySlide(m, bm, p, dx, dy);   // commits the move + sets p.floorz/p.ceilingz (bbox opening)
     int ss = R_PointInSubsector(m, p.x, p.y);
     p.subsector = ss;
     p.sector = sectorOf(m, ss);
-    if (p.sector >= 0) p.floorz = static_cast<float>(m.sectors[p.sector].floorheight);
+    // Do NOT overwrite p.floorz with the point-sector floor. P_TryMove already set it to the
+    // bbox opening floor (vanilla mo->floorz = tmfloorz); resetting it to the floor under the
+    // player's center point breaks multi-step climbs (bbox reaches a step >24 above the reset
+    // floor) and sinks the eye into steps. P3d fix.
     P_CalcHeight(m, p);
 }
