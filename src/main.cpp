@@ -24,6 +24,57 @@ int main(int argc, char** argv) {
     try {
         // P1 diagnostic: dump a WAD's lump directory and exit.
         for (int i = 1; i < argc; ++i) {
+            if (std::string(argv[i]) == "--mapinfo" && i + 1 < argc) {
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                float px, py, ang;
+                if (playerStart(map, px, py, ang))
+                    std::cout << "start: x=" << px << " y=" << py << " ang=" << ang << "\n";
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                if (sec0 >= 0)
+                    std::cout << "start sector " << sec0
+                              << " floor=" << map.sectors[sec0].floorheight
+                              << " ceil=" << map.sectors[sec0].ceilingheight << "\n";
+                // Lowest-floor sectors (pit candidates) with a vertex centroid to teleport near.
+                std::vector<int> order(map.sectors.size());
+                for (size_t s = 0; s < map.sectors.size(); ++s) order[s] = (int)s;
+                std::sort(order.begin(), order.end(), [&](int a, int b){
+                    return map.sectors[a].floorheight < map.sectors[b].floorheight; });
+                std::cout << "--- 12 lowest-floor sectors ---\n";
+                for (int k = 0; k < (int)std::min<size_t>(12, order.size()); ++k) {
+                    int s = order[k];
+                    double cx = 0, cy = 0; int n = 0;
+                    for (const auto& sg : map.segs)
+                        if (sg.frontsector == s || sg.backsector == s) {
+                            if (sg.v1 >= 0 && sg.v1 < (int)map.vertices.size()) {
+                                cx += (map.vertices[sg.v1].x >> 16); cy += (map.vertices[sg.v1].y >> 16); ++n; }
+                            if (sg.v2 >= 0 && sg.v2 < (int)map.vertices.size()) {
+                                cx += (map.vertices[sg.v2].x >> 16); cy += (map.vertices[sg.v2].y >> 16); ++n; }
+                        }
+                    if (n) { cx /= n; cy /= n; }
+                    std::cout << "sec " << s << " floor=" << map.sectors[s].floorheight
+                              << " ceil=" << map.sectors[s].ceilingheight
+                              << " centroid=(" << (int)cx << "," << (int)cy << ")\n";
+                }
+                return 0;
+            }
+            if (std::string(argv[i]) == "--sample" && i + 2 < argc) {
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                float qx = static_cast<float>(std::atof(argv[i + 2]));
+                float qy = (i + 3 < argc) ? static_cast<float>(std::atof(argv[i + 3])) : 0.0f;
+                int ss = R_PointInSubsector(map, qx, qy);
+                int sec = sectorOf(map, ss);
+                std::cout << "at (" << qx << "," << qy << ") subsector=" << ss << " sector=" << sec;
+                if (sec >= 0)
+                    std::cout << " floor=" << map.sectors[sec].floorheight
+                              << " ceil=" << map.sectors[sec].ceilingheight
+                              << " floorpic='" << map.sectors[sec].floorpic << "'"
+                              << " ceilpic='" << map.sectors[sec].ceilingpic << "'";
+                std::cout << "\n";
+                return 0;
+            }
             if (std::string(argv[i]) == "--listlumps" && i + 1 < argc) {
                 WadFile wad(argv[i + 1]);
                 std::cout << wad.numLumps() << " lumps in " << argv[i + 1]
@@ -43,6 +94,10 @@ int main(int argc, char** argv) {
                 if (i + 3 < argc) {  // optional DOOM-angle override (degrees)
                     int a = std::atoi(argv[i + 3]);
                     ang = (90.0f - static_cast<float>(a)) * 3.14159265f / 180.0f;
+                }
+                if (i + 5 < argc) {  // optional [px py] teleport (debug)
+                    px = static_cast<float>(std::atof(argv[i + 4]));
+                    py = static_cast<float>(std::atof(argv[i + 5]));
                 }
                 constexpr int FW = 320, FH = 200;
                 std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
