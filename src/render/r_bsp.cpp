@@ -164,7 +164,12 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         int cc = c.ceilingClip[x], fc = c.floorClip[x];
         if (markCeil && ceilPlane >= 0) {
             int top = cc + 1;
-            int bot = static_cast<int>(std::floor(yCeilF)) - 1;
+            // Sky is an infinite-height backdrop: it fills from the top of the open region
+            // down to the HORIZON (where the floor begins), not down to the projected nominal
+            // ceiling. For a high/outdoor sky the nominal ceiling (yCeilF) projects off the
+            // top of the screen, so using it left a black band between sky and floor. P3d fix.
+            int bot = skyCeilF ? (static_cast<int>(std::floor(yFloorF)) - 1)
+                               : (static_cast<int>(std::floor(yCeilF)) - 1);
             if (bot >= fc) bot = fc - 1;
             if (top <= bot) { c.vps[ceilPlane].top[x] = top; c.vps[ceilPlane].bottom[x] = bot; }
         }
