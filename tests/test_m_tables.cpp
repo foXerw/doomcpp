@@ -26,7 +26,8 @@ TEST_CASE("finesine indexed by BAM angle via ANGLETOFINESHIFT") {
 
 TEST_CASE("finecosine aliases finesine shifted by a quarter period") {
     R_InitTables();
-    for (angle_t a = 0; a < 8u * ANG45; a += ANG45) {       // 0..360 in 45-deg steps
+    for (int k = 0; k < 8; ++k) {                 // 0..315 deg in 45-deg steps
+        angle_t a = static_cast<angle_t>(k) * ANG45;
         int i = (a >> ANGLETOFINESHIFT) & FINEMASK;
         CHECK(finecosine[i] == finesine[i + FINEANGLES/4]);  // definition of finecosine
     }
