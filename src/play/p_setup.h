@@ -32,7 +32,7 @@ struct sector_t    {
 };
 struct seg_t       { int v1, v2, linedef, side, offset, frontsector, backsector; };
 struct subsector_t { int segcount, firstseg; };
-struct node_t      { float x, y, dx, dy; uint32_t children[2]; };
+struct node_t      { fixed_t x, y, dx, dy; uint32_t children[2]; };
 struct thing_t     { int x, y, angleDeg, type; };
 
 // Parsed BLOCKMAP (p_setup.c::P_LoadBlockMap). lump holds the raw int16 stream:

@@ -24,9 +24,14 @@ struct Cam {
     uint32_t tick = 0;               // animated-flat tick
 };
 
+// P3.5a: node_t is now fixed_t; the float renderer reads coords as map units
+// (>> FRACBITS) exactly as it already does for vertices. P3.5b makes this fixed.
 int pointOnSide(float x, float y, const node_t& n) {
-    float dx = x - n.x, dy = y - n.y;
-    float left = n.dy * dx, right = n.dx * dy;
+    float nx = static_cast<float>(n.x >> FRACBITS);
+    float ny = static_cast<float>(n.y >> FRACBITS);
+    float dx = x - nx, dy = y - ny;
+    float left  = static_cast<float>(n.dy >> FRACBITS) * dx;
+    float right = static_cast<float>(n.dx >> FRACBITS) * dy;
     return (right < left) ? 0 : 1;
 }
 

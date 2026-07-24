@@ -105,10 +105,10 @@ std::vector<node_t> parseNodes(const byte* d, size_t n) {
     std::vector<node_t> out(n / 28);
     for (size_t i = 0; i < out.size(); ++i) {
         const byte* p = d + i * 28;
-        out[i].x  = static_cast<float>(rd_i16(p));
-        out[i].y  = static_cast<float>(rd_i16(p + 2));
-        out[i].dx = static_cast<float>(rd_i16(p + 4));
-        out[i].dy = static_cast<float>(rd_i16(p + 6));
+        out[i].x  = static_cast<fixed_t>(rd_i16(p))     << 16;
+        out[i].y  = static_cast<fixed_t>(rd_i16(p + 2)) << 16;
+        out[i].dx = static_cast<fixed_t>(rd_i16(p + 4)) << 16;
+        out[i].dy = static_cast<fixed_t>(rd_i16(p + 6)) << 16;
         out[i].children[0] = static_cast<uint16_t>(rd_i16(p + 24));
         out[i].children[1] = static_cast<uint16_t>(rd_i16(p + 26));
     }
