@@ -38,8 +38,9 @@ int P_BoxOnLineSide(const BBox& bb, fixed_t x1, fixed_t y1, fixed_t x2, fixed_t 
     fixed_t dx = x2 - x1, dy = y2 - y1;
     auto side = [&](fixed_t px, fixed_t py) -> int {
         fixed_t cross = FixedMul(dy, (px - x1)) - FixedMul(dx, (py - y1));
-        // NOTE: vanilla form is dx*(py-y1)-dy*(px-x1); we keep the pre-existing
-        // equivalent sign convention so the straddle result is unchanged.
+        // Sign is FLIPPED vs vanilla (negated cross product). Harmless: straddle
+        // detection (corner signs differ) and the sole caller's !=-1 test are both
+        // sign-invariant, so the per-side 0/1 label is never consumed.
         return (cross < 0) ? 1 : 0;
     };
     int s = side(bb.left, bb.bottom);

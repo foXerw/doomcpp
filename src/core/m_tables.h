@@ -9,4 +9,6 @@ extern fixed_t* const finecosine;   // == finesine + FINEANGLES/4
 
 // Populate finesine (and thereby finecosine). Idempotent. Float is used ONLY
 // here, at table-generation time — exactly how vanilla's tables.c was produced.
+// CONTRACT: callers MUST call R_InitTables() before indexing finesine/finecosine;
+// the storage is zero-initialized (no constructor) so unreached entries are 0.
 void R_InitTables();

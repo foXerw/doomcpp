@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 #include "core/i_system.h"
+#include "core/m_tables.h"
 #include "platform/i_video.h"
 #include "play/p_setup.h"
 #include "play/p_maputl.h"
@@ -32,6 +33,8 @@ int main(int argc, char** argv) {
     SDL_SetMainReady();
 
     try {
+        // Init vanilla trig tables (finesine/finecosine) before any movement/rendering that indexes them.
+        R_InitTables();
         // P1 diagnostic: dump a WAD's lump directory and exit.
         for (int i = 1; i < argc; ++i) {
             if (std::string(argv[i]) == "--mapinfo" && i + 1 < argc) {
