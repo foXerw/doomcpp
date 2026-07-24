@@ -146,12 +146,12 @@ Blockmap parseBlockmap(const byte* d, size_t n) {
     return bm;
 }
 
-bool playerStart(const MapData& m, float& x, float& y, float& ang) {
+bool playerStart(const MapData& m, fixed_t& x, fixed_t& y, angle_t& ang) {
     for (const auto& t : m.things) {
         if (t.type == 1) {   // player 1 start
-            x = static_cast<float>(t.x);
-            y = static_cast<float>(t.y);
-            ang = (90.0f - static_cast<float>(t.angleDeg)) * 3.14159265f / 180.0f;
+            x = static_cast<fixed_t>(t.x) << FRACBITS;
+            y = static_cast<fixed_t>(t.y) << FRACBITS;
+            ang = degreesToBam(t.angleDeg);   // vanilla BAM (0=East, 90=North)
             return true;
         }
     }

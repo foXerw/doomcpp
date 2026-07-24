@@ -69,5 +69,6 @@ std::vector<thing_t>     parseThings(const byte* d, size_t n);     // 10 bytes
 // Load a map by marker name (e.g. "E1M1"); resolves seg front/back sectors.
 MapData loadMap(const WadFile& wad, const std::string& mapname);
 
-// Find thing type 1 (player 1 start); sets x/y/ang. Returns false if none.
-bool playerStart(const MapData& m, float& x, float& y, float& ang);
+// Find thing type 1 (player 1 start); sets x/y (fixed map units) and ang
+// (vanilla BAM: 0=East, 90=North). Returns false if none.
+bool playerStart(const MapData& m, fixed_t& x, fixed_t& y, angle_t& ang);
