@@ -17,3 +17,16 @@ TEST_CASE("FixedDiv saturates instead of UB on overflow") {
     CHECK(FixedDiv(64 * FRACUNIT, 1) == std::numeric_limits<fixed_t>::max());
     CHECK(FixedDiv(-64 * FRACUNIT, 1) == std::numeric_limits<fixed_t>::min());
 }
+
+#include "core/doomtype.h"   // already included transitively via m_fixed.h
+
+TEST_CASE("BAM angle constants and degreesToBam") {
+    CHECK(ANG90  == 0x40000000u);
+    CHECK(ANG180 == 0x80000000u);
+    CHECK(ANG270 == 0xC0000000u);
+    CHECK(degreesToBam(0)   == 0u);
+    CHECK(degreesToBam(90)  == ANG90);
+    CHECK(degreesToBam(180) == ANG180);
+    CHECK(degreesToBam(360) == 0u);            // wraps full circle
+    CHECK((angle_t)0 == 0u);                   // angle_t is uint32
+}
