@@ -62,7 +62,10 @@ void R_SetupPlaneTables(PlaneCtx& c) {
     c.distscale.assign(c.w, 0.0f);
     for (int y = 0; y < c.h; ++y) {
         float dy = static_cast<float>(y) - c.h / 2.0f;
-        c.yslope[y] = (std::fabs(dy) < 1e-6f) ? INFINITY : c.focal / std::fabs(dy);
+        // Horizon row (dy==0): FINITE and far, not INFINITY. Vanilla returns MAXINT here;
+        // a large finite value shade-clamps to the same dark/far texels WITHOUT forcing
+        // R_DrawSpan to skip the row (which left a permanent 1px black seam). P3d fix.
+        c.yslope[y] = (std::fabs(dy) < 1e-6f) ? (c.focal * 64.0f) : (c.focal / std::fabs(dy));
     }
     for (int x = 0; x < c.w; ++x)
         c.distscale[x] = (x - c.w / 2.0f) / c.focal;
@@ -98,7 +101,6 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
         return;
     }
     if (!flat || flat->rgba.empty() || flat->width <= 0) return;
-    if (y == c.h / 2) return;                       // horizon: infinite distance
     float dist = planeheight * c.yslope[y];
     if (!std::isfinite(dist) || dist <= 0.0f) return;
     float shade = R_DistanceShade(dist) * (light / 255.0f);

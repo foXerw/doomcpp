@@ -124,13 +124,24 @@ TEST_CASE("P_CalcHeight: viewz approaches floor+VIEWHEIGHT, clamped under ceilin
 TEST_CASE("P_CalcHeight: viewz converges to floor+VIEWHEIGHT over several tics") {
     MapData m;
     sector_t s; s.floorheight = 100; s.ceilingheight = 1000; m.sectors.push_back(s);
-    Player p; p.sector = 0; p.viewz = 100;   // starts at floor, target = 141
+    Player p; p.sector = 0; p.floorz = 100; p.viewz = 100;   // target = floorz+VIEWHEIGHT = 141
     for (int i = 0; i < 40; ++i) P_CalcHeight(m, p);
     CHECK(p.viewz == doctest::Approx(141.0f).epsilon(0.01f));
     // monotonic approach
-    Player q; q.sector = 0; q.viewz = 100;
+    Player q; q.sector = 0; q.floorz = 100; q.viewz = 100;
     float prev = q.viewz;
     for (int i = 0; i < 5; ++i) { P_CalcHeight(m, q); CHECK(q.viewz >= prev); prev = q.viewz; }
+}
+
+TEST_CASE("P_MovePlayer keeps raised floorz when straddling a step (vanilla tmfloorz tracking)") {
+    auto tm = buildTestMap(/*oneSided*/false, /*backFloor*/8);   // two-sided step to floor +8 at x=270
+    Player p; p.x = 264; p.y = 256; p.angle = 0; p.floorz = 0; p.viewz = 41; p.sector = 0;
+    // bbox [248,280] straddles the step -> P_TryMove raises floorz to 8. A faithful engine
+    // KEEPS that (vanilla mo->floorz = tmfloorz). The old code overwrote p.floorz with the
+    // point-sector floor (0) every tic, which breaks stair climbs (bbox reaches a step >24
+    // above the reset floor) and sinks the eye into steps. No-op move here isolates the bug.
+    P_MovePlayer(tm.m, tm.bm, p, /*fwd*/0, /*str*/0, /*turn*/0);
+    CHECK(p.floorz == 8.0f);
 }
 
 TEST_CASE("P_MovePlayer: forward in open space moves + re-sectors + keeps viewz near target") {

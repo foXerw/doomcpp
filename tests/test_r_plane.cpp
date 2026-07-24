@@ -77,9 +77,12 @@ TEST_CASE("R_SetupPlaneTables fills yslope/distscale per formula") {
     // yslope[y] = focal / |y - h/2|
     CHECK(c.yslope[150] == doctest::Approx(160.0f / 50.0f));   // y=150 -> |150-100|=50
     CHECK(c.yslope[50]  == doctest::Approx(160.0f / 50.0f));   // y=50  -> |50-100|=50
-    // horizon row (y==100) is huge but finite
-    bool horizon_huge = std::isinf(c.yslope[100]) || c.yslope[100] > 1e6f;
-    CHECK(horizon_huge);
+    // horizon row (y==100): FINITE and far (not INFINITY). P3d: was INFINITY, which forced
+    // R_DrawSpan to skip the horizon row -> a permanent 1px black seam (whole row black in
+    // outdoor views). Now finite so the row is drawn (dark/far) like vanilla.
+    CHECK(!std::isinf(c.yslope[100]));
+    CHECK(c.yslope[100] > 1e3f);
+    CHECK(c.yslope[100] > c.focal);   // farther than the closest real row (|dy|=1 -> focal)
 }
 
 TEST_CASE("R_DistanceShade is monotonic decreasing with a floor") {
@@ -110,6 +113,21 @@ TEST_CASE("R_DrawSpan writes shaded flat texels and sky writes constant") {
     R_DrawSpan(c, 1, 0, 7, nullptr, 0.0f, 0, /*sky=*/true);
     for (int x = 0; x < 8; ++x)
         CHECK(fb[1*8 + x] == kSkyColor);
+}
+
+TEST_CASE("R_DrawSpan draws the horizon row (y==h/2) instead of leaving a black seam") {
+    PlaneCtx c; c.w = 8; c.h = 8; c.focal = 4.0f; c.eyeZ = 0.0f;
+    c.px = 0; c.py = 0; c.sin = 0; c.cos = 1.0f;   // looking +Y
+    std::vector<uint32_t> fb(8*8, 0); c.fb = fb.data();
+    R_SetupPlaneTables(c);
+    Flat f{}; f.width = 64; f.height = 64;
+    f.rgba.assign(64*64, (0x80u<<24)|(0x80u<<16)|(0x80u<<8)|0xFFu);   // grey, opaque
+    int hy = c.h / 2;                                  // the horizon row
+    R_DrawSpan(c, hy, 0, 7, &f, /*planeheight=*/41.0f, /*light=*/255, /*sky=*/false);
+    for (int x = 0; x < 8; ++x) {
+        CHECK(fb[hy*8 + x] != 0u);                    // drawn, NOT left at clear-color black
+        CHECK((fb[hy*8 + x] & 0xFFu) == 0xFFu);        // opaque
+    }
 }
 
 // --- Task 5: R_PlaneSpans (row-run span enumeration) ---
