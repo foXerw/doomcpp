@@ -3,6 +3,7 @@ add_executable(doomcpp_tests
     test_smoke.cpp
     test_i_system.cpp
     test_m_fixed.cpp
+    test_m_tables.cpp
     test_m_random.cpp
     test_wadfile.cpp
     test_p_setup.cpp
