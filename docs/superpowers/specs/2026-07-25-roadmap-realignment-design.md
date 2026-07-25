@@ -16,7 +16,7 @@
 
 实践过程中,原文档"保留 16.16 定点数"的决策在 P2/P3b/P3c 出现了漂移(三角函数、`yslope`/`distscale`、碰撞改用浮点)。本次重新对齐**回到最严档**:
 
-> **算法 + 数值双忠实。** 渲染/碰撞的算法流程忠实复刻原引擎的设计,且**数值用 16.16 定点实现**(含 trig 表 `finecosine`/`finesine`/`finetangent`)。
+> **算法忠实 + 碰撞定点。** 渲染/碰撞的算法流程忠实复刻原引擎的设计。**碰撞/移动用 16.16 定点 + BAM 角度**（`finecosine`/`finesine`）；**渲染器用 float**（doomcpp 自己从零写的代码，自身数值自洽——见 §2 复刻声明）。曾要求"数值双忠实（渲染也定点）"，但渲染器 occlusion 逻辑对精度极敏感、定点回填已证脆而放弃（见 §4.3）。
 
 > **复刻,不是翻译。** doomcpp 是从零的 C++17 重新实现:可以读 vanilla 源码理解算法**原理**,但**不逐行翻译**原版 C、**不**装 chocolate-doom 做 bit-exact 逐像素 oracle。采用 16.16 定点是复刻其数值表示设计,而非追求与原版逐值相等。
 
@@ -52,17 +52,15 @@ P8 联机不计入完成;P7 内的 demo 录制回放为可选项,不阻塞完成
 
 ### 4.3 新增阶段
 
-#### `v0.9` · P3.5 定点回填
+#### `v0.9` · P3.5 碰撞定点 + 渲染器复刻（float）
 - **范围**:
-  1. 渲染数学回填 16.16 定点——`finecosine`/`finesine`/`finetangent`/`tantoangle` trig 表;`r_bsp` 投影与 seg 列高/透视 U/V;`r_data` 距离阴影表。
-  2. `r_plane`:`yslope`/`distscale` 表与 `R_DrawSpan` 内循环定点化。
-  3. `p_map`/`p_maputl` 碰撞(`R_PointOnSide` / `P_CheckPosition` / `P_TryMove`)定点化。(✅ P3.5a 已落地)
-  4. 删除 `bamToRendererRad` 桥,渲染器直接吃 `angle_t`。
-  5. 顺带修本次发现的渲染算法偏差(上墙条件反转、plane band 公式)——靠理解 DOOM 算法 + doomcpp 自身数值自洽验证,不逐行翻译 vanilla。
-- **交付**:全渲染/碰撞核心走定点;既有测试全绿;`--dumpframe` + 洋红 gap 扫描无未覆盖大块;用户实机视觉无回归。
-- **验收**:a) 核心路径无 `float`/`double` 残留(仅边界 I/O 与表生成例外);b) doomcpp 自身数值自洽 + 视觉合理(见 §5);c) 单测全绿。
-- **保留偏差**:`R_PlaneSpans`(替代 `R_MakeSpans`,可证等价)保留;stairstep slide(全 `P_SlideMove` 延后 P6a)。
-- **不做**:不搭 chocolate-doom 逐帧 oracle、不逐行翻译 vanilla 源码(见 §2 复刻声明)。
+  1. ✅ `p_map`/`p_maputl` 碰撞（`R_PointOnSide`/`P_CheckPosition`/`P_TryMove`）、`node_t`、玩家移动改 16.16 定点 + BAM 角度（P3.5a 已落地）。
+  2. ✅ 下墙（bottomtexture）条件修复（`85fdc32`）——消除坑底 HOM 黑带。
+  3. **渲染器保持 float**（`r_bsp`/`r_plane`/`r_data`）——它是 doomcpp 自己从零写的代码，是合法的"复刻"（见 §2）。曾尝试 float→16.16 定点回填，但渲染器 occlusion/visplane 逻辑对数值精度极敏感，定点舍入改变墙列高→clip 闭合→连锁产生大空洞（坑底 gap 65→~25000），根因（clip-closure 舍入）未定位，**已回退放弃**。`FixedSqrt` 保留。
+- **交付**:碰撞/移动走定点；渲染器走 float（自身数值自洽 + 视觉合理）；既有测试全绿；坑底洋红 gap 扫描回到 65（基线）。
+- **验收**:a) 碰撞核心无 `float`（渲染器允许 float）；b) doomcpp 自身数值自洽 + 视觉合理（见 §5）；c) 单测全绿。
+- **保留偏差**:`R_PlaneSpans`（替代 `R_MakeSpans`，可证等价）；渲染器用 float（非 16.16）；stairstep slide（全 `P_SlideMove` 延后 P6a）；玩家起点仍有 ~1671 未覆盖像素（上墙/plane-band 偏差，待后续在 float 上修）。
+- **不做**:渲染器定点回填（已证脆，放弃）；不搭 chocolate-doom oracle、不逐行翻译 vanilla（见 §2）。
 
 ### 4.4 前向阶段(细化)
 
@@ -97,7 +95,7 @@ P8 联机不计入完成;P7 内的 demo 录制回放为可选项,不阻塞完成
 
 | 偏差 | 状态 / 何时消除 |
 |---|---|
-| 渲染数学 / `yslope`/`distscale` / 碰撞用 float | **P3.5 回填定点后消除** |
+| 渲染数学 / `yslope`/`distscale` 用 float | **永久保留**——渲染器是 doomcpp 自己的 float 复刻；定点回填已证脆（occlusion 精度敏感）而放弃（§4.3）。碰撞已定点（P3.5a） |
 | `R_PlaneSpans` 替代 `R_MakeSpans` | **永久保留**(可证等价 + 内存安全;文档留底) |
 | 仅 stairstep slide(非全 `P_SlideMove`) | **P6a 消除** |
 | momentum / friction / view bob 缺失 | **P6a 补齐** |
@@ -106,7 +104,7 @@ P8 联机不计入完成;P7 内的 demo 录制回放为可选项,不阻塞完成
 | 音频用 SDL2_mixer(非原版 DMX) | **永久保留为已知偏差**——原版 DMX/MUS 音色不可得,SDL2_mixer 合成仅近似 |
 | 联网 P8 | 路线图外,不计入完成 |
 
-P3.5 完成后,仅剩 **3 项永久偏差**:`R_PlaneSpans`、音频 SDL2_mixer、P8 延后——均有据可查,且不影响战役通关。
+P3.5 完成后,永久偏差:`R_PlaneSpans`、渲染器 float、音频 SDL2_mixer、P8 延后——均有据可查,且不影响战役通关。
 
 ## 7. 路线图不做的事(YAGNI 收口)
 - 不做硬件加速渲染(OpenGL/Vulkan)——坚持软件渲染保真。
