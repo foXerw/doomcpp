@@ -24,9 +24,14 @@ struct Cam {
     uint32_t tick = 0;               // animated-flat tick
 };
 
+// P3.5a: node_t is now fixed_t; the float renderer reads coords as map units
+// (>> FRACBITS) exactly as it already does for vertices. P3.5b makes this fixed.
 int pointOnSide(float x, float y, const node_t& n) {
-    float dx = x - n.x, dy = y - n.y;
-    float left = n.dy * dx, right = n.dx * dy;
+    float nx = static_cast<float>(n.x >> FRACBITS);
+    float ny = static_cast<float>(n.y >> FRACBITS);
+    float dx = x - nx, dy = y - ny;
+    float left  = static_cast<float>(n.dy >> FRACBITS) * dx;
+    float right = static_cast<float>(n.dx >> FRACBITS) * dy;
     return (right < left) ? 0 : 1;
 }
 
@@ -185,8 +190,10 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         } else {
             // upper wall (ceiling step): back ceiling higher than front
             if (topT && cH_b > cH_f) drawCol(c, x, scale, *topT, U, sd.rowoffset, cH_b, cH_f, light, false, /*upper*/true, false, depth);
-            // lower wall (floor step): back floor lower than front
-            if (botT && fH_b < fH_f) drawCol(c, x, scale, *botT, U, sd.rowoffset, fH_f, fH_b, light, false, false, /*lower*/true, depth);
+            // lower wall (floor step): vanilla r_segs.c:589 draws bottomtexture when back floor
+            // is HIGHER than front (worldlow>worldbottom) -- the riser of a floor step-UP.
+            // (Old fH_b<fH_f was inverted -> missed the pit step-up riser -> HOM gap.)
+            if (botT && fH_b > fH_f) drawCol(c, x, scale, *botT, U, sd.rowoffset, fH_b, fH_f, light, false, false, /*lower*/true, depth);
             // masked middle (fences/grates): floats in the back opening; transparent pixels see through; no clip update
             if (midT && cH_b > fH_b) drawCol(c, x, scale, *midT, U, sd.rowoffset, cH_b, fH_b, light, false, false, false, depth);
         }

@@ -19,6 +19,7 @@ add_library(doomcore STATIC
     src/core/i_system.cpp
     src/core/m_fixed.cpp
     src/core/m_random.cpp
+    src/core/m_tables.cpp
     src/wad/wadfile.cpp
     src/play/p_setup.cpp
     src/play/p_maputl.cpp

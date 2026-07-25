@@ -6,6 +6,7 @@ namespace {
 // Minimal map with a single vertical BSP partition at x=256 splitting two subsectors.
 // side 0 = right half (x>256), side 1 = left half (x<256).
 struct MiniMap { MapData m; };
+static fixed_t F(int m) { return static_cast<fixed_t>(m) << FRACBITS; }
 static MiniMap buildBspMap() {
     MiniMap mm;
     auto& m = mm.m;
@@ -21,7 +22,7 @@ static MiniMap buildBspMap() {
     subsector_t ss0; ss0.segcount = 1; ss0.firstseg = 0; m.subsectors.push_back(ss0);
     subsector_t ss1; ss1.segcount = 1; ss1.firstseg = 1; m.subsectors.push_back(ss1);
     // root node: partition from (256,0) going +Y (dx=0, dy>0)
-    node_t n; n.x = 256; n.y = 0; n.dx = 0; n.dy = 256;
+    node_t n; n.x = F(256); n.y = F(0); n.dx = F(0); n.dy = F(256);
     n.children[0] = NF_SUBSECTOR | 0;   // right -> subsector 0
     n.children[1] = NF_SUBSECTOR | 1;   // left  -> subsector 1
     m.nodes.push_back(n);
@@ -30,21 +31,21 @@ static MiniMap buildBspMap() {
 } // namespace
 
 TEST_CASE("R_PointOnSide picks front/back of a partition") {
-    node_t n; n.x = 256; n.y = 0; n.dx = 0; n.dy = 256;   // vertical partition at x=256
-    CHECK(R_PointOnSide(300, 100, n) == 0);   // right -> front (0)
-    CHECK(R_PointOnSide(100, 100, n) == 1);   // left  -> back  (1)
+    node_t n; n.x = F(256); n.y = F(0); n.dx = F(0); n.dy = F(256);
+    CHECK(R_PointOnSide(F(300), F(100), n) == 0);
+    CHECK(R_PointOnSide(F(100), F(100), n) == 1);
 }
 
 TEST_CASE("R_PointInSubsector descends BSP to the right leaf") {
     auto mm = buildBspMap();
-    CHECK(R_PointInSubsector(mm.m, 300, 100) == 0);   // right half -> subsector 0
-    CHECK(R_PointInSubsector(mm.m, 100, 100) == 1);   // left half  -> subsector 1
+    CHECK(R_PointInSubsector(mm.m, F(300), F(100)) == 0);
+    CHECK(R_PointInSubsector(mm.m, F(100), F(100)) == 1);
 }
 
 TEST_CASE("R_PointInSubsector: no nodes returns subsector 0") {
     MapData m;
     subsector_t ss; ss.segcount = 0; ss.firstseg = 0; m.subsectors.push_back(ss);
-    CHECK(R_PointInSubsector(m, 5, 5) == 0);
+    CHECK(R_PointInSubsector(m, F(5), F(5)) == 0);
 }
 
 TEST_CASE("sectorOf resolves subsector -> sector via its first seg") {
@@ -54,19 +55,16 @@ TEST_CASE("sectorOf resolves subsector -> sector via its first seg") {
     CHECK(sectorOf(mm.m, 99) == -1); // out of range
 }
 
-#include <cmath>
-
 TEST_CASE("P_BoxOnLineSide: box straddling a line returns -1") {
-    BBox bb{ /*left*/240, /*right*/272, /*bottom*/240, /*top*/272};
-    // vertical line at x=270
-    CHECK(P_BoxOnLineSide(bb, 270, 128, 270, 384) == -1);   // straddle -> collision candidate
+    BBox bb{ F(240), F(272), F(240), F(272) };   // left,right,bottom,top
+    CHECK(P_BoxOnLineSide(bb, F(270), F(128), F(270), F(384)) == -1);
 }
 
 TEST_CASE("P_BoxOnLineSide: box wholly on one side returns that side") {
-    BBox left{100, 120, 100, 120};   // entirely left of vertical line x=270
-    CHECK(P_BoxOnLineSide(left, 270, 128, 270, 384) != -1);
-    BBox right{400, 420, 100, 120};  // entirely right
-    CHECK(P_BoxOnLineSide(right, 270, 128, 270, 384) != -1);
+    BBox left{F(100),F(120),F(100),F(120)};
+    CHECK(P_BoxOnLineSide(left, F(270),F(128),F(270),F(384)) != -1);
+    BBox right{F(400),F(420),F(100),F(120)};
+    CHECK(P_BoxOnLineSide(right, F(270),F(128),F(270),F(384)) != -1);
 }
 
 TEST_CASE("P_LineOpening: two-sided -> range = min ceil - max floor") {
@@ -77,10 +75,10 @@ TEST_CASE("P_LineOpening: two-sided -> range = min ceil - max floor") {
     side_t sb; sb.sector = 1; m.sides.push_back(sb);
     line_t L; L.sidenum[0] = 0; L.sidenum[1] = 1; m.lines.push_back(L);
     Opening o = P_LineOpening(m, L);
-    CHECK(o.top == doctest::Approx(128));    // min(128,200)
-    CHECK(o.bottom == doctest::Approx(16));  // max(0,16)
-    CHECK(o.lowfloor == doctest::Approx(0)); // min(0,16)
-    CHECK(o.range == doctest::Approx(112));
+    CHECK(o.top      == 128 << FRACBITS);
+    CHECK(o.bottom   == 16  << FRACBITS);
+    CHECK(o.lowfloor == 0);
+    CHECK(o.range    == 112 << FRACBITS);
 }
 
 TEST_CASE("P_LineOpening: one-sided line -> range 0") {
@@ -89,7 +87,7 @@ TEST_CASE("P_LineOpening: one-sided line -> range 0") {
     side_t sa; sa.sector = 0; m.sides.push_back(sa);
     line_t L; L.sidenum[0] = 0; L.sidenum[1] = -1; m.lines.push_back(L);
     Opening o = P_LineOpening(m, L);
-    CHECK(o.range == 0.0f);
+    CHECK(o.range == 0);
 }
 
 TEST_CASE("blockLinesInCell returns the cell's line list, empty out of range") {

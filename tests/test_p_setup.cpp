@@ -70,8 +70,8 @@ TEST_CASE("parseNodes reads 28-byte records + children flags") {
     b.push_back(0x00); b.push_back(0x80);            // child1 = 0x8000 (NF_SUBSECTOR)
     auto n = parseNodes(b.data(), b.size());
     CHECK(n.size() == 1);
-    CHECK(n[0].x == 10);
-    CHECK(n[0].dx == 5);
+    CHECK(n[0].x == 10 << 16);
+    CHECK(n[0].dx == 5 << 16);
     CHECK(n[0].children[0] == 0x1234);
     CHECK((n[0].children[1] & 0x8000) != 0);
 }

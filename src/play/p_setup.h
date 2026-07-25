@@ -32,7 +32,7 @@ struct sector_t    {
 };
 struct seg_t       { int v1, v2, linedef, side, offset, frontsector, backsector; };
 struct subsector_t { int segcount, firstseg; };
-struct node_t      { float x, y, dx, dy; uint32_t children[2]; };
+struct node_t      { fixed_t x, y, dx, dy; uint32_t children[2]; };
 struct thing_t     { int x, y, angleDeg, type; };
 
 // Parsed BLOCKMAP (p_setup.c::P_LoadBlockMap). lump holds the raw int16 stream:
@@ -69,5 +69,6 @@ std::vector<thing_t>     parseThings(const byte* d, size_t n);     // 10 bytes
 // Load a map by marker name (e.g. "E1M1"); resolves seg front/back sectors.
 MapData loadMap(const WadFile& wad, const std::string& mapname);
 
-// Find thing type 1 (player 1 start); sets x/y/ang. Returns false if none.
-bool playerStart(const MapData& m, float& x, float& y, float& ang);
+// Find thing type 1 (player 1 start); sets x/y (fixed map units) and ang
+// (vanilla BAM: 0=East, 90=North). Returns false if none.
+bool playerStart(const MapData& m, fixed_t& x, fixed_t& y, angle_t& ang);

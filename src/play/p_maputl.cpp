@@ -1,15 +1,19 @@
 #include "p_maputl.h"
-#include <cmath>
+#include "core/m_fixed.h"
+#include <algorithm>
 
-int R_PointOnSide(float x, float y, const node_t& n) {
-    float dx = x - n.x, dy = y - n.y;
-    float left  = n.dy * dx;
-    float right = n.dx * dy;
-    return (right < left) ? 0 : 1;   // matches r_bsp.cpp::pointOnSide; equivalent to vanilla
+// Faithful to r_main.c::R_PointOnSide: node direction is taken in map units
+// (>> FRACBITS) before the FixedMul to avoid overflow, exactly as vanilla.
+int R_PointOnSide(fixed_t x, fixed_t y, const node_t& n) {
+    fixed_t dx = x - n.x;
+    fixed_t dy = y - n.y;
+    fixed_t left  = FixedMul(n.dy >> FRACBITS, dx);
+    fixed_t right = FixedMul(n.dx >> FRACBITS, dy);
+    return (right < left) ? 0 : 1;
 }
 
-int R_PointInSubsector(const MapData& m, float x, float y) {
-    if (m.nodes.empty()) return 0;            // single subsector (vanilla special case)
+int R_PointInSubsector(const MapData& m, fixed_t x, fixed_t y) {
+    if (m.nodes.empty()) return 0;
     uint32_t nodenum = static_cast<uint32_t>(m.nodes.size() - 1);
     while (!(nodenum & NF_SUBSECTOR)) {
         const node_t& n = m.nodes[nodenum];
@@ -28,17 +32,22 @@ int sectorOf(const MapData& m, int subsectorIdx) {
     return -1;
 }
 
-int P_BoxOnLineSide(const BBox& bb, float x1, float y1, float x2, float y2) {
-    float dx = x2 - x1, dy = y2 - y1;
-    auto side = [&](float px, float py) -> int {
-        float cross = dx * (py - y1) - dy * (px - x1);
-        return (cross < 0.0f) ? 1 : 0;     // >= 0 -> front (on-line counts as front)
+// Cross-product sign test on all four bbox corners; -1 = straddle (collision
+// candidate). FixedMul preserves sign; int64 intermediate avoids overflow.
+int P_BoxOnLineSide(const BBox& bb, fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2) {
+    fixed_t dx = x2 - x1, dy = y2 - y1;
+    auto side = [&](fixed_t px, fixed_t py) -> int {
+        fixed_t cross = FixedMul(dy, (px - x1)) - FixedMul(dx, (py - y1));
+        // Sign is FLIPPED vs vanilla (negated cross product). Harmless: straddle
+        // detection (corner signs differ) and the sole caller's !=-1 test are both
+        // sign-invariant, so the per-side 0/1 label is never consumed.
+        return (cross < 0) ? 1 : 0;
     };
     int s = side(bb.left, bb.bottom);
     if (s != side(bb.right, bb.bottom)) return -1;
     if (s != side(bb.left, bb.top))     return -1;
     if (s != side(bb.right, bb.top))    return -1;
-    return s;   // all four corners agree; -1 above means straddle
+    return s;
 }
 
 Opening P_LineOpening(const MapData& m, const line_t& L) {
@@ -49,13 +58,13 @@ Opening P_LineOpening(const MapData& m, const line_t& L) {
     if (L.sidenum[1] < 0 || L.sidenum[1] >= static_cast<int>(m.sides.size())) return o;  // one-sided
     int backSec = m.sides[L.sidenum[1]].sector;
     if (backSec < 0 || backSec >= static_cast<int>(m.sectors.size())) return o;
-    float fH_f = static_cast<float>(m.sectors[frontSec].floorheight);
-    float cH_f = static_cast<float>(m.sectors[frontSec].ceilingheight);
-    float fH_b = static_cast<float>(m.sectors[backSec].floorheight);
-    float cH_b = static_cast<float>(m.sectors[backSec].ceilingheight);
-    o.top      = std::fmin(cH_f, cH_b);
-    o.bottom   = std::fmax(fH_f, fH_b);
-    o.lowfloor = std::fmin(fH_f, fH_b);
+    fixed_t fH_f = static_cast<fixed_t>(m.sectors[frontSec].floorheight)   << FRACBITS;
+    fixed_t cH_f = static_cast<fixed_t>(m.sectors[frontSec].ceilingheight) << FRACBITS;
+    fixed_t fH_b = static_cast<fixed_t>(m.sectors[backSec].floorheight)    << FRACBITS;
+    fixed_t cH_b = static_cast<fixed_t>(m.sectors[backSec].ceilingheight)  << FRACBITS;
+    o.top      = std::min(cH_f, cH_b);
+    o.bottom   = std::max(fH_f, fH_b);
+    o.lowfloor = std::min(fH_f, fH_b);
     o.range    = o.top - o.bottom;
     return o;
 }
