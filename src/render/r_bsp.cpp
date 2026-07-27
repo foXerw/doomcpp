@@ -260,9 +260,16 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     for (int i = 0; i < w * h; ++i) fb[i] = 0x000000FFu;            // opaque black clear
     renderNode(c, map, static_cast<uint32_t>(map.nodes.size() - 1));
     R_DrawPlanes(c.plane, c.vps);
-    // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after
-    // visplanes, reusing ceilingClip/floorClip so walls occlude sprite columns.
+    // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after visplanes.
+    // The wall-rendering clip arrays (ceilingClip/floorClip) close every column that holds a
+    // solid wall, so reusing them for sprites would mark every column occluded and draw nothing.
+    // Reset them to fully-open here: each sprite then draws its full projected footprint
+    // [x1..x2]x[syTop..syBot] over walls+planes. Wall occlusion of sprites (vanilla's per-sprite
+    // mfloorclip/mceilingclip built from front-of-sprite segs) is a future enhancement; this
+    // phase is clip-READ-only and writes only sprite pixels, so it cannot regress walls/HOM.
     if (c.sprites && !c.vissprites.empty()) {
+        std::fill(c.ceilingClip.begin(), c.ceilingClip.end(), -1);
+        std::fill(c.floorClip.begin(), c.floorClip.end(), h);
         std::sort(c.vissprites.begin(), c.vissprites.end(),
                   [](const vissprite_t& a, const vissprite_t& b){ return a.depth > b.depth; });
         for (const vissprite_t& vs : c.vissprites)

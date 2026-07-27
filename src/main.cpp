@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@
 #include "render/r_bsp.h"
 #include "render/r_data.h"
 #include "render/r_draw.h"
+#include "render/r_things.h"
 #include "wad/wadfile.h"
 
 // P3.5a BRIDGE (delete in P3.5b): the renderer still takes the P2a float angle
@@ -105,6 +107,28 @@ int main(int argc, char** argv) {
                 WadFile wad(argv[i + 1]);
                 MapData map = loadMap(wad, "E1M1");
                 TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                std::vector<mobj_t> mobs;
+                std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
+                for (size_t ti = 0; ti < map.things.size(); ++ti) {
+                    const thing_t& th = map.things[ti];
+                    const SpriteDef* def = spriteDefForType(th.type);
+                    if (!def) continue;
+                    mobj_t m;
+                    m.x = static_cast<fixed_t>(th.x) << FRACBITS;
+                    m.y = static_cast<fixed_t>(th.y) << FRACBITS;
+                    m.angle = degreesToBam(th.angleDeg);
+                    std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
+                    m.frame = def->frame;
+                    m.fullbright = def->fullbright;
+                    int ss = R_PointInSubsector(map, m.x, m.y);
+                    int sec = sectorOf(map, ss);
+                    m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
+                    m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
+                    mobs.push_back(m);
+                    if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
+                        thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
+                }
                 fixed_t px, py; angle_t ang;
                 if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
                 if (i + 3 < argc) {   // optional DOOM-angle override (degrees)
@@ -123,9 +147,10 @@ int main(int argc, char** argv) {
                                            : 0) + VIEWHEIGHT;
                 R_RenderView(fb.data(), FW, FH, map, tex,
                              static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
-                             bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0);
+                             bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
+                             &mobs, &sprites, &thingsBySubsec);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
-                std::cout << "wrote " << argv[i + 2] << "\n";
+                std::cout << "wrote " << argv[i + 2] << " (mobs=" << mobs.size() << ")\n";
                 return 0;
             }
         }
@@ -135,6 +160,28 @@ int main(int argc, char** argv) {
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
+        SpriteCache sprites(wad);
+        std::vector<mobj_t> mobs;
+        std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
+        for (size_t ti = 0; ti < map.things.size(); ++ti) {
+            const thing_t& th = map.things[ti];
+            const SpriteDef* def = spriteDefForType(th.type);
+            if (!def) continue;
+            mobj_t m;
+            m.x = static_cast<fixed_t>(th.x) << FRACBITS;
+            m.y = static_cast<fixed_t>(th.y) << FRACBITS;
+            m.angle = degreesToBam(th.angleDeg);
+            std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
+            m.frame = def->frame;
+            m.fullbright = def->fullbright;
+            int ss = R_PointInSubsector(map, m.x, m.y);
+            int sec = sectorOf(map, ss);
+            m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
+            m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
+            mobs.push_back(m);
+            if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
+                thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
+        }
         Player p;
         {   fixed_t sx, sy; angle_t sang;
             if (!playerStart(map, sx, sy, sang)) { sx = 0; sy = 0; sang = 0; }
@@ -168,7 +215,7 @@ int main(int argc, char** argv) {
             R_RenderView(fb.data(), FB_W, FB_H, map, tex,
                          static_cast<float>(p.x >> FRACBITS), static_cast<float>(p.y >> FRACBITS),
                          bamToRendererRad(p.angle), static_cast<float>(p.viewz >> FRACBITS),
-                         ticCount);
+                         ticCount, &mobs, &sprites, &thingsBySubsec);
             i_video::present(fb.data());
         }
 
