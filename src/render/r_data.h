@@ -9,7 +9,8 @@
 class WadFile;   // fwd
 
 // Decoded picture (column-major source format flattened to w*h RGBA).
-struct Patch { int width = 0, height = 0; std::vector<uint32_t> rgba; };
+// leftoffset/topoffset come from the patch_t header (used by sprites; walls ignore them).
+struct Patch { int width = 0, height = 0, leftoffset = 0, topoffset = 0; std::vector<uint32_t> rgba; };
 
 // A composited wall texture (full-brightness RGBA; alpha 0 = no patch there).
 struct Texture { char name[9] = {0}; int width = 0, height = 0; std::vector<uint32_t> rgba; };

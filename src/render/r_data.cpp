@@ -47,6 +47,8 @@ Patch decodePatch(const byte* data, size_t n, const uint32_t* palette) {
     if (width < 0 || height < 0) I_Error("decodePatch: negative dimensions");
     patch.width = width;
     patch.height = height;
+    patch.leftoffset = rd_i16(data + 4);
+    patch.topoffset  = rd_i16(data + 6);
     patch.rgba.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0u);  // transparent
     for (int col = 0; col < width; ++col) {
         const byte* base = data + 8;
@@ -188,9 +190,9 @@ TextureLookup::TextureLookup(const WadFile& wad) {
         if (idx < 0 || idx >= static_cast<int>(patches.size())) return;
         if (patches[idx].width != 0 || patches[idx].height != 0) return;   // decoded
         int lump = const_cast<WadFile&>(wad).checkNumForName(pnames[idx]);
-        if (lump < 0) { patches[idx] = Patch{0, 0, {}}; return; }
+        if (lump < 0) { patches[idx] = Patch{0, 0, 0, 0, {}}; return; }
         auto raw = const_cast<WadFile&>(wad).readLump(lump);
-        patches[idx] = raw.empty() ? Patch{0, 0, {}} : decodePatch(raw.data(), raw.size(), palette_.data());
+        patches[idx] = raw.empty() ? Patch{0, 0, 0, 0, {}} : decodePatch(raw.data(), raw.size(), palette_.data());
     };
 
     auto loadLumpDefs = [&](const char* lumpName) {
