@@ -76,9 +76,11 @@ P4 让 E1M1 出现**静态精灵**：物品桶、装饰、敌人（静止）按�
 3. `depth <= nearZ`（≈0.01）→ 丢弃（在身后/贴脸）。
 4. 旋转选择（相对方位，非相机基）：从 thing 看向 player 的方位 `viewAng = atan2f(py − gy, px − gx)`；`relAng = viewAng − thingFacingRad`（thingFacingRad 由 `mobj.angle` BAM→弧度）；把 `relAng` 量化到 8 向 rotation index（每 45° 一档、半档偏置对齐 vanilla `>>29`）。该 frame 若无该 rotation 的独立 lump → 退回 rotation 1；再查镜像（§4，决定 `flip`）。得到 `SpritePatch*`，nullptr 则丢弃。
 5. `scale = 1/depth`（**与 `drawCol` 同约定**，避免单位不一致）。屏心 `xcenter = w/2 + focal*tx*scale`；sprite 屏宽 = `patchWidth*focal*scale`；`x1 = xcenter − leftoffset*focal*scale`；`x2 = x1 + patchWidth*focal*scale`。`[x1,x2]` 与屏外无交集 → 丢弃。
-6. `gzt = z + patchHeight;` `gzb = z;`（patchHeight 取自 sprite patch，非 mobjinfo——与 vanilla `spriteheight[]` 同源）。
+6. `gzt = z + topoffset`（**图像顶部**的 world-z，faithful to vanilla `R_ProjectSprite:556` `vis->gzt = thing->z + spritetopoffset`）。**非** `z + patchHeight`——对 `topoffset != height` 的精灵（多数悬挂/装饰）会垂直错位。图像底部 = `gzt − patchHeight`（patchHeight 取自 patch）。
 7. `light` = 所在 sector `lightlevel`（`fullbright` 则 255）。
-8. 产出 `vissprite_t { float depth, scale, x1, x2, gzt, gzb; const SpritePatch* patch; bool flip; int light; }` 入 `Cam::vissprites`。
+8. 产出 `vissprite_t { float depth, scale; int x1,x2; float xTrueLeft, gzt; const Patch* patch; bool flip; int light; }` 入 `Cam::vissprites`。`xTrueLeft` = 未裁剪的左屏沿（texcol 映射用，因 x1/x2 已 clamp 到屏）；`gzb` 不存（= `gzt − patch->height` 可推导）。
+
+> **精确的 per-row 绘制公式**（含 `imgRow = gzt − worldZ` 的逐行反投影、syTop/syBot、texcol/flip）见实现计划 `docs/superpowers/plans/2026-07-27-p4-sprites.md` Task 7–8；本节为概念描述。
 
 ## 7. 绘制（R_DrawSprites / R_DrawMaskedColumn）
 
