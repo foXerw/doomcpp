@@ -18,6 +18,9 @@ struct Texture { char name[9] = {0}; int width = 0, height = 0; std::vector<uint
 // A decoded flat: 64x64 full-bright RGBA (alpha 0xFF).
 struct Flat { char name[9] = {0}; int width = 64, height = 64; std::vector<uint32_t> rgba; };
 
+// PLAYPAL -> 256-entry RGBA palette ((R<<24)|(G<<16)|(B<<8)|0xFF). Missing WAD -> all 0.
+std::array<uint32_t, 256> loadPalette(const WadFile& wad);
+
 // PNAMES: count + 8-byte names.
 std::vector<std::string> parsePnames(const byte* d, size_t n);
 

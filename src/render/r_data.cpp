@@ -21,6 +21,18 @@ std::string upper(std::string s) {
 }
 }
 
+std::array<uint32_t, 256> loadPalette(const WadFile& wad) {
+    std::array<uint32_t, 256> pal{};
+    auto raw = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
+    for (int i = 0; i < 256; ++i) {
+        if (static_cast<size_t>(i * 3 + 2) < raw.size())
+            pal[i] = (static_cast<uint32_t>(raw[i * 3]) << 24) |
+                     (static_cast<uint32_t>(raw[i * 3 + 1]) << 16) |
+                     (static_cast<uint32_t>(raw[i * 3 + 2]) << 8) | 0xFFu;
+    }
+    return pal;
+}
+
 std::vector<std::string> parsePnames(const byte* d, size_t n) {
     if (n < 4) I_Error("parsePnames: too small");
     int count = rd_i32(d);
@@ -169,16 +181,7 @@ std::string resolveFlatFrame(const std::string& name, uint32_t tick) {
 }
 
 TextureLookup::TextureLookup(const WadFile& wad) {
-    // PLAYPAL -> palette_ (first 256 entries; RGB -> RGBA opaque)
-    auto pal = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
-    for (int i = 0; i < 256; ++i) {
-        if (static_cast<size_t>(i * 3 + 2) < pal.size())
-            palette_[i] = (static_cast<uint32_t>(pal[i * 3]) << 24) |
-                          (static_cast<uint32_t>(pal[i * 3 + 1]) << 16) |
-                          (static_cast<uint32_t>(pal[i * 3 + 2]) << 8) | 0xFFu;
-        else
-            palette_[i] = 0u;
-    }
+    palette_ = loadPalette(wad);
 
     // PNAMES
     auto pn = const_cast<WadFile&>(wad).readLumpByName("PNAMES");
