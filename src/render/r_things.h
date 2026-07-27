@@ -82,11 +82,13 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
                      float focal, int w, int h);
 
 // ---- R_DrawVisSprite (Task 8) ----
-// Per-screen-column masked draw of one vissprite. For each column in [vis.x1, vis.x2]
-// it maps to a sprite texel column (mirrored if vis.flip), clips each screen row to
-// [ceilingClip[x]+1, floorClip[x]-1] (wall occlusion), inverse-projects the row to a
-// world-z -> patch row, skips transparent texels (alpha==0), distance-shades, and
-// writes RGBA. Shading/byte-order mirror drawCol in r_bsp.cpp exactly.
+// Per-screen-column masked draw of one vissprite. For each column in [vis.x1, vis.x2]:
+// if wallDepth[x] <= vis.depth a nearer-or-equal opaque wall fully occludes this column
+// (skip); otherwise the sprite is the nearer surface and draws its own [syTop,syBot]
+// extent (clamped to screen) over wall/plane pixels. Maps each screen column to a sprite
+// texel column (mirrored if vis.flip), inverse-projects the row to world-z -> patch row,
+// skips transparent texels (alpha==0), distance-shades, and writes RGBA.
+// Shading/byte-order mirror drawCol in r_bsp.cpp exactly.
 void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
                      float eyeZ, float focal,
-                     const std::vector<int>& ceilingClip, const std::vector<int>& floorClip);
+                     const std::vector<float>& wallDepth);

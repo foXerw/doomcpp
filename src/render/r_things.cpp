@@ -190,9 +190,15 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
 // (set by R_ProjectSprite = z + topoffset). syTop is the screen row of image row 0;
 // moving down the screen (y increasing) decreases worldZ, so imgRow = gzt - worldZ
 // grows downward (screen-down == image-down). Shading/byte-order mirror drawCol.
+//
+// Occlusion: wallDepth[x] is the nearest opaque wall's depth at column x (inf if none).
+// If wallDepth[x] <= vis.depth, a nearer-or-equal wall fully hides the sprite at x (skip);
+// otherwise the sprite is the nearer surface and overdraws wall/plane pixels within its
+// own [syTop,syBot] screen extent. Masked-middle walls (fences) are not recorded in
+// wallDepth, so sprites behind a fence show through (matches vanilla).
 void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
                      float eyeZ, float focal,
-                     const std::vector<int>& ceilingClip, const std::vector<int>& floorClip) {
+                     const std::vector<float>& wallDepth) {
     if (!vis.patch || vis.patch->width <= 0 || vis.patch->height <= 0) return;
     if (vis.x1 > vis.x2) return;
     float ppe = focal * vis.scale;                       // pixels per texel
@@ -200,15 +206,15 @@ void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
     float shade = std::clamp((vis.light / 255.0f) * R_DistanceShade(vis.depth), 0.0f, 1.0f);
     float syTop = h / 2.0f - focal * (vis.gzt - eyeZ) * vis.scale;   // screen row of image row 0
     float syBot = syTop + ppe * vis.patch->height;                   // screen row just past image bottom
+    int yA = std::max(0, static_cast<int>(std::ceil(syTop)));
+    int yB = std::min(h - 1, static_cast<int>(std::floor(syBot)));
     for (int x = vis.x1; x <= vis.x2; ++x) {
         if (x < 0 || x >= w) continue;
-        if (ceilingClip[x] >= floorClip[x] - 1) continue;            // column fully occluded
+        if (wallDepth[x] <= vis.depth) continue;                     // nearer/equal opaque wall occludes column
         float tc = (static_cast<float>(x) - vis.xTrueLeft) / ppe;
         if (vis.flip) tc = (vis.patch->width - 1) - tc;              // mirror texel column
         int col = static_cast<int>(std::floor(tc));
         if (col < 0 || col >= vis.patch->width) continue;
-        int yA = std::max(static_cast<int>(std::ceil(syTop)),  ceilingClip[x] + 1);
-        int yB = std::min(static_cast<int>(std::floor(syBot)), floorClip[x] - 1);
         for (int y = yA; y <= yB; ++y) {
             float worldZ = eyeZ + (h / 2.0f - y) / (focal * vis.scale);  // inverse project screen row -> world z
             int row = static_cast<int>(std::floor(vis.gzt - worldZ));    // screen-down == image-down
