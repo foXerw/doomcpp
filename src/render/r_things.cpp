@@ -2,6 +2,7 @@
 #include "r_data.h"        // loadPalette, decodePatch
 #include "wad/wadfile.h"   // WadFile (ctor)
 #include <cctype>
+#include <cmath>
 
 SpriteLumpName parseSpriteLumpName(const std::string& name) {
     SpriteLumpName out;
@@ -91,4 +92,20 @@ SpriteCache::SpriteCache(const WadFile& wad) {
     for (size_t i = 0; i < owned_.size(); ++i) {
         install(w.lumpName(lumpIdx[i]), &owned_[i]);
     }
+}
+
+// ---- spriteRotationIndex (Task 5) ----
+// Float equivalent of vanilla `rot = (ang - thing->angle + (ANG45/2)*9) >> 29`.
+// (ANG45/2)*9 = 202.5 deg = 9*pi/8 shifts the bin grid so that relAng == 0
+// (player directly behind the thing's facing) lands in the centre of bin 4.
+int spriteRotationIndex(float relAngRad) {
+    constexpr float PI = 3.141592653589793f;
+    constexpr float TWO_PI = 2.0f * PI;
+    constexpr float OFFSET = 9.0f * PI / 8.0f;   // (ANG45/2)*9 = 202.5 deg
+    float a = std::fmod(relAngRad + OFFSET, TWO_PI);
+    if (a < 0.0f) a += TWO_PI;                   // fmod may be negative
+    int r = static_cast<int>(a / (TWO_PI / 8.0f));
+    if (r < 0) r = 0;                            // clamp at boundaries
+    if (r > 7) r = 7;
+    return r;
 }

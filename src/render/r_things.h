@@ -35,3 +35,9 @@ private:
     std::unordered_map<std::string, std::array<SpriteFrame, 29>> frames_;  // sprname -> [frame-'A']
     std::vector<Patch> owned_;   // decoded patches (ctor path); stable after ctor returns
 };
+
+// ---- 8-way rotation index (Task 5) ----
+// relAngRad = (angle from thing toward player) - (thing's facing), in radians.
+// Returns 0..7 (0 = facing viewer / front, 4 = back). Float equivalent of
+// vanilla `rot = (ang - thing->angle + (ANG45/2)*9) >> 29`.
+int spriteRotationIndex(float relAngRad);

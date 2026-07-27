@@ -1,6 +1,7 @@
 #include "doctest.h"
 #include "render/r_things.h"
 #include "render/r_data.h"   // Patch
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -64,4 +65,18 @@ TEST_CASE("SpriteCache: rotation 0 -> single lump for all rotIndex, case-insensi
         CHECK(v.patch == &p);
         CHECK(v.flip == false);
     }
+}
+
+// ---- spriteRotationIndex (Task 5) ----
+
+TEST_CASE("spriteRotationIndex maps relative angle to 8-way (0=front,4=back)") {
+    const float PI = 3.141592653589793f;
+    CHECK(spriteRotationIndex(0.0f)        == 4);   // player behind thing's facing -> back
+    CHECK(spriteRotationIndex(PI)          == 0);   // player in front             -> front
+    CHECK(spriteRotationIndex(PI / 2.0f)   == 6);   // +90
+    CHECK(spriteRotationIndex(-PI / 2.0f)  == 2);   // -90
+    CHECK(spriteRotationIndex(PI / 4.0f)   == 5);   // +45
+    CHECK(spriteRotationIndex(-PI / 4.0f)  == 3);   // -45
+    // periodicity: +2pi == 0
+    CHECK(spriteRotationIndex(2.0f * PI)   == 4);
 }
