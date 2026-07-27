@@ -80,3 +80,13 @@ struct vissprite_t {
 bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprites,
                      float px, float py, float sin, float cos, float eyeZ,
                      float focal, int w, int h);
+
+// ---- R_DrawVisSprite (Task 8) ----
+// Per-screen-column masked draw of one vissprite. For each column in [vis.x1, vis.x2]
+// it maps to a sprite texel column (mirrored if vis.flip), clips each screen row to
+// [ceilingClip[x]+1, floorClip[x]-1] (wall occlusion), inverse-projects the row to a
+// world-z -> patch row, skips transparent texels (alpha==0), distance-shades, and
+// writes RGBA. Shading/byte-order mirror drawCol in r_bsp.cpp exactly.
+void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
+                     float eyeZ, float focal,
+                     const std::vector<int>& ceilingClip, const std::vector<int>& floorClip);

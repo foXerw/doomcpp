@@ -1,5 +1,6 @@
 #include "r_things.h"
 #include "r_data.h"        // loadPalette, decodePatch
+#include "r_plane.h"       // R_DistanceShade
 #include "wad/wadfile.h"   // WadFile (ctor)
 #include <algorithm>
 #include <cctype>
@@ -182,4 +183,44 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
     out.flip = v.flip;
     out.light = t.fullbright ? 255 : t.light;
     return true;
+}
+
+// ---- R_DrawVisSprite (Task 8) ----
+// Per-screen-column masked draw. Image TOP (texel row 0) sits at world-z `gzt`
+// (set by R_ProjectSprite = z + topoffset). syTop is the screen row of image row 0;
+// moving down the screen (y increasing) decreases worldZ, so imgRow = gzt - worldZ
+// grows downward (screen-down == image-down). Shading/byte-order mirror drawCol.
+void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
+                     float eyeZ, float focal,
+                     const std::vector<int>& ceilingClip, const std::vector<int>& floorClip) {
+    if (!vis.patch || vis.patch->width <= 0 || vis.patch->height <= 0) return;
+    if (vis.x1 > vis.x2) return;
+    float ppe = focal * vis.scale;                       // pixels per texel
+    if (ppe <= 0.0f) return;
+    float shade = std::clamp((vis.light / 255.0f) * R_DistanceShade(vis.depth), 0.0f, 1.0f);
+    float syTop = h / 2.0f - focal * (vis.gzt - eyeZ) * vis.scale;   // screen row of image row 0
+    float syBot = syTop + ppe * vis.patch->height;                   // screen row just past image bottom
+    for (int x = vis.x1; x <= vis.x2; ++x) {
+        if (x < 0 || x >= w) continue;
+        if (ceilingClip[x] >= floorClip[x] - 1) continue;            // column fully occluded
+        float tc = (static_cast<float>(x) - vis.xTrueLeft) / ppe;
+        if (vis.flip) tc = (vis.patch->width - 1) - tc;              // mirror texel column
+        int col = static_cast<int>(std::floor(tc));
+        if (col < 0 || col >= vis.patch->width) continue;
+        int yA = std::max(static_cast<int>(std::ceil(syTop)),  ceilingClip[x] + 1);
+        int yB = std::min(static_cast<int>(std::floor(syBot)), floorClip[x] - 1);
+        for (int y = yA; y <= yB; ++y) {
+            float worldZ = eyeZ + (h / 2.0f - y) / (focal * vis.scale);  // inverse project screen row -> world z
+            int row = static_cast<int>(std::floor(vis.gzt - worldZ));    // screen-down == image-down
+            if (row < 0 || row >= vis.patch->height) continue;
+            uint32_t texel = vis.patch->rgba[static_cast<size_t>(row) * vis.patch->width + col];
+            if (!(texel & 0xFFu)) continue;                            // transparent (alpha==0) -> skip
+            uint8_t r = static_cast<uint8_t>((texel >> 24 & 0xFF) * shade);
+            uint8_t g = static_cast<uint8_t>((texel >> 16 & 0xFF) * shade);
+            uint8_t b = static_cast<uint8_t>((texel >> 8  & 0xFF) * shade);
+            fb[static_cast<size_t>(y) * w + x] =
+                (static_cast<uint32_t>(r) << 24) | (static_cast<uint32_t>(g) << 16) |
+                (static_cast<uint32_t>(b) << 8) | 0xFFu;
+        }
+    }
 }
