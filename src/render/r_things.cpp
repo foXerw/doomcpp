@@ -109,3 +109,31 @@ int spriteRotationIndex(float relAngRad) {
     if (r > 7) r = 7;
     return r;
 }
+
+// ---- spriteDefForType (Task 6) ----
+namespace {
+// doomednum -> spawnstate sprite/frame/fullbright, from vanilla info.c mobjinfo[].
+// Covers E1M1's renderable thing types (player/DM starts 1-4,11 are intentionally absent).
+const SpriteDef kSpriteDefs[] = {
+    {5,    "BKEY", 'A', false}, {9,    "SPOS", 'A', false}, {10,   "PLAY", 'W', false},
+    {12,   "PLAY", 'W', false}, {15,   "PLAY", 'N', false}, {17,   "CELP", 'A', false},
+    {18,   "POSS", 'L', false}, {20,   "TROO", 'M', false}, {21,   "SARG", 'N', false},
+    {24,   "POL5", 'A', false}, {26,   "POL6", 'A', false}, {43,   "TRE1", 'A', false},
+    {47,   "SMIT", 'A', false}, {48,   "ELEC", 'A', false}, {54,   "TRE2", 'A', false},
+    {60,   "GOR4", 'A', false},
+    {2001, "SHOT", 'A', false}, {2002, "MGUN", 'A', false}, {2003, "LAUN", 'A', false},
+    {2004, "PLAS", 'A', false}, {2005, "CSAW", 'A', false}, {2007, "CLIP", 'A', false},
+    {2008, "SHEL", 'A', false}, {2010, "ROCK", 'A', false}, {2011, "STIM", 'A', false},
+    {2012, "MEDI", 'A', false}, {2013, "SOUL", 'A', true},  {2014, "BON1", 'A', false},
+    {2015, "BON2", 'A', false}, {2018, "ARM1", 'A', false}, {2028, "COLU", 'A', true},
+    {2035, "BAR1", 'A', false}, {2046, "BROK", 'A', false}, {2048, "AMMO", 'A', false},
+    {2049, "SBOX", 'A', false},
+    {3001, "TROO", 'A', false}, {3002, "SARG", 'A', false}, {3004, "POSS", 'A', false},
+};
+}  // namespace
+
+const SpriteDef* spriteDefForType(int doomednum) {
+    for (const SpriteDef& d : kSpriteDefs)
+        if (d.doomednum == doomednum) return &d;
+    return nullptr;
+}

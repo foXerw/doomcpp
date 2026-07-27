@@ -80,3 +80,20 @@ TEST_CASE("spriteRotationIndex maps relative angle to 8-way (0=front,4=back)") {
     // periodicity: +2pi == 0
     CHECK(spriteRotationIndex(2.0f * PI)   == 4);
 }
+
+// ---- spriteDefForType (Task 6) ----
+
+TEST_CASE("spriteDefForType maps doomednum to sprite, skips player/DM starts") {
+    const SpriteDef* b = spriteDefForType(2035);
+    REQUIRE(b != nullptr);
+    CHECK(std::string(b->sprname) == "BAR1");
+    CHECK(b->frame == 'A');
+    CHECK(spriteDefForType(3004)->sprname == std::string("POSS"));
+    CHECK(spriteDefForType(3001)->sprname == std::string("TROO"));
+    CHECK(spriteDefForType(9)->sprname     == std::string("SPOS"));
+    CHECK(spriteDefForType(15)->frame      == 'N');       // dead player corpse frame
+    CHECK(spriteDefForType(2013)->fullbright == true);    // soulsphere
+    CHECK(spriteDefForType(1)   == nullptr);   // player start -> skip
+    CHECK(spriteDefForType(11)  == nullptr);   // DM start -> skip
+    CHECK(spriteDefForType(9999)== nullptr);   // unknown -> skip
+}
