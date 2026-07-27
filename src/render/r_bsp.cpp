@@ -2,6 +2,7 @@
 #include "r_draw.h"
 #include "r_data.h"
 #include "r_plane.h"
+#include "r_things.h"
 #include "play/p_setup.h"
 #include <algorithm>
 #include <cmath>
@@ -22,6 +23,11 @@ struct Cam {
     PlaneCtx plane;                  // visplane rendering context
     std::vector<Visplane> vps;       // visplane list for this frame
     uint32_t tick = 0;               // animated-flat tick
+    // P4 sprite phase (optional; populated only when R_RenderView callers pass things).
+    const std::vector<mobj_t>* things = nullptr;
+    const SpriteCache* sprites = nullptr;
+    const std::vector<std::vector<int>>* thingsBySubsec = nullptr;
+    std::vector<vissprite_t> vissprites;
 };
 
 // P3.5a: node_t is now fixed_t; the float renderer reads coords as map units
@@ -207,6 +213,18 @@ void renderSubsector(Cam& c, const MapData& m, int idx) {
         int s = ss.firstseg + i;
         if (s >= 0 && s < static_cast<int>(m.segs.size())) renderSeg(c, m, m.segs[s]);
     }
+    // P4: collect vissprites for this subsector's things. idx is the subsector index
+    // (callers pass child & ~NF_SUBSECTOR); use it directly into thingsBySubsec.
+    if (c.things && c.sprites && c.thingsBySubsec && idx >= 0 &&
+        idx < static_cast<int>(c.thingsBySubsec->size())) {
+        for (int ti : (*c.thingsBySubsec)[idx]) {
+            if (ti < 0 || ti >= static_cast<int>(c.things->size())) continue;
+            vissprite_t vs;
+            if (R_ProjectSprite(vs, (*c.things)[ti], *c.sprites,
+                                c.px, c.py, c.sin, c.cos, c.eyeZ, c.focal, c.w, c.h))
+                c.vissprites.push_back(vs);
+        }
+    }
 }
 void renderNode(Cam& c, const MapData& m, uint32_t idx) {
     if (idx & NF_SUBSECTOR) { renderSubsector(c, m, idx & ~NF_SUBSECTOR); return; }
@@ -220,7 +238,10 @@ void renderNode(Cam& c, const MapData& m, uint32_t idx) {
 
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
                   const TextureLookup& tex, float px, float py, float ang,
-                  float eyeZ, uint32_t animTick) {
+                  float eyeZ, uint32_t animTick,
+                  const std::vector<mobj_t>* things,
+                  const SpriteCache* sprites,
+                  const std::vector<std::vector<int>>* thingsBySubsec) {
     if (map.nodes.empty() || map.subsectors.empty()) return;
     Cam c;
     c.px = px; c.py = py; c.eyeZ = eyeZ;
@@ -234,7 +255,17 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     c.plane.fb = fb;
     R_SetupPlaneTables(c.plane);
     c.vps.clear();
+    c.vissprites.clear();
+    c.things = things; c.sprites = sprites; c.thingsBySubsec = thingsBySubsec;
     for (int i = 0; i < w * h; ++i) fb[i] = 0x000000FFu;            // opaque black clear
     renderNode(c, map, static_cast<uint32_t>(map.nodes.size() - 1));
     R_DrawPlanes(c.plane, c.vps);
+    // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after
+    // visplanes, reusing ceilingClip/floorClip so walls occlude sprite columns.
+    if (c.sprites && !c.vissprites.empty()) {
+        std::sort(c.vissprites.begin(), c.vissprites.end(),
+                  [](const vissprite_t& a, const vissprite_t& b){ return a.depth > b.depth; });
+        for (const vissprite_t& vs : c.vissprites)
+            R_DrawVisSprite(c.fb, c.w, c.h, vs, c.eyeZ, c.focal, c.ceilingClip, c.floorClip);
+    }
 }
