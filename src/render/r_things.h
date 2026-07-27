@@ -60,3 +60,23 @@ struct mobj_t {
     bool    fullbright = false;
     int     light = 160;         // sector lightlevel 0..255
 };
+
+// ---- vissprite_t + R_ProjectSprite (Task 7) ----
+// A projected, screen-space sprite: the bridge between R_Project (world -> screen)
+// and R_DrawVisSprite (column raster). depth/scale are post-rotation (forward axis);
+// gzt is the world-z of the image TOP (z + patch.topoffset), faithful to vanilla.
+struct vissprite_t {
+    float depth = 0, scale = 0;
+    int   x1 = 0, x2 = -1;       // clamped screen column range [0,w-1]
+    float xTrueLeft = 0;         // un-clamped left screen edge (texcol mapping)
+    float gzt = 0;               // world-z of image TOP = z + topoffset
+    const Patch* patch = nullptr;
+    bool  flip = false;
+    int   light = 160;           // 0..255 (255 if fullbright)
+};
+// Project a thing to a vissprite using the renderer's float basis
+// (depth = dx*sin+dy*cos, tx = dx*cos-dy*sin — same as renderSeg in r_bsp.cpp).
+// Returns false if behind the view plane, fully off-screen, or unresolvable.
+bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprites,
+                     float px, float py, float sin, float cos, float eyeZ,
+                     float focal, int w, int h);

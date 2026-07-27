@@ -97,3 +97,58 @@ TEST_CASE("spriteDefForType maps doomednum to sprite, skips player/DM starts") {
     CHECK(spriteDefForType(11)  == nullptr);   // DM start -> skip
     CHECK(spriteDefForType(9999)== nullptr);   // unknown -> skip
 }
+
+// ---- R_ProjectSprite (Task 7) ----
+
+TEST_CASE("R_ProjectSprite rejects a thing behind the camera") {
+    SpriteCache sc; Patch p{2,2,0,0,std::vector<uint32_t>(4,0xFFu)};
+    sc.install("POSSA0", &p);                // non-rotate, all angles
+    mobj_t t; t.x = 0; t.y = (fixed_t)(-5 << 16); t.z = 0; t.angle = 0;
+    std::memcpy(t.sprname,"POSS",5); t.frame='A';
+    vissprite_t vs;
+    // camera at origin looking +Y (sin=0,cos=1 -> depth=dy); thing south at (0,-5): depth=-5 <0 -> behind
+    bool ok = R_ProjectSprite(vs, t, sc, 0,0, 0.0f,1.0f, 41.0f, 160.0f, 320,200);
+    CHECK(ok == false);
+}
+
+TEST_CASE("R_ProjectSprite projects a centered thing with correct x1/x2/gzt") {
+    SpriteCache sc;
+    // 4 wide, 8 tall patch; leftoffset=2, topoffset=8 -> feet at z
+    Patch p{4,8, 2,8, std::vector<uint32_t>(32, 0xFFFFFFFFu)};
+    sc.install("BAR1A0", &p);
+    mobj_t t; t.x = 0; t.y = (fixed_t)(100 << 16); t.z = 0; t.angle = 0;
+    std::memcpy(t.sprname,"BAR1",5); t.frame='A'; t.light=160;
+    vissprite_t vs;
+    // camera at origin looking +Y (sin=0,cos=1); thing north at (0,100): depth=dy=100, tx=dx=0
+    bool ok = R_ProjectSprite(vs, t, sc, 0,0, 0.0f,1.0f, 41.0f, 160.0f, 320,200);
+    REQUIRE(ok);
+    CHECK(vs.depth == doctest::Approx(100.0f));
+    CHECK(vs.scale == doctest::Approx(0.01f));
+    // ppe = focal*scale = 160*0.01 = 1.6 px/texel; width 4 -> 6.4px; centered at x=160
+    // xTrueLeft = 160 - leftoffset(2)*1.6 = 156.8 ; x1=156, x2=163
+    CHECK(vs.x1 <= 160); CHECK(vs.x2 >= 160);
+    CHECK(vs.gzt == doctest::Approx(8.0f));   // z(0) + topoffset(8)
+    CHECK(vs.patch == &p);
+    CHECK(vs.flip == false);
+}
+
+TEST_CASE("R_ProjectSprite picks front/back rotation by relative facing") {
+    // Locks the atan2 sign (player->thing, NOT thing->player).
+    SpriteCache sc;
+    Patch front{1,1,0,0,std::vector<uint32_t>(1,0xAAAAAAAAu)};   // rotation 1 (index 0) = front view
+    Patch back {1,1,0,0,std::vector<uint32_t>(1,0xBBBBBBBBu)};   // rotation 5 (index 4) = back view
+    sc.install("TROOA1", &front);
+    sc.install("TROOA5", &back);
+    mobj_t t; t.x = 0; t.y = (fixed_t)(100 << 16); t.z = 0;
+    std::memcpy(t.sprname,"TROO",5); t.frame='A'; t.light=160;
+    vissprite_t vs;
+    // camera at origin looking +Y; thing north at (0,100). viewAng(player->thing)=atan2(100,0)=North(+pi/2).
+    // thing faces South (ANG270, toward player) -> rel = pi/2 - 3pi/2 = -pi ~= pi -> rotIdx 0 -> FRONT
+    t.angle = ANG270;
+    REQUIRE(R_ProjectSprite(vs, t, sc, 0,0, 0.0f,1.0f, 41.0f, 160.0f, 320,200));
+    CHECK(vs.patch == &front);
+    // thing faces North (ANG90, away from player) -> rel = pi/2 - pi/2 = 0 -> rotIdx 4 -> BACK
+    t.angle = ANG90;
+    REQUIRE(R_ProjectSprite(vs, t, sc, 0,0, 0.0f,1.0f, 41.0f, 160.0f, 320,200));
+    CHECK(vs.patch == &back);
+}

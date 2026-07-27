@@ -1,6 +1,7 @@
 #include "r_things.h"
 #include "r_data.h"        // loadPalette, decodePatch
 #include "wad/wadfile.h"   // WadFile (ctor)
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 
@@ -136,4 +137,49 @@ const SpriteDef* spriteDefForType(int doomednum) {
     for (const SpriteDef& d : kSpriteDefs)
         if (d.doomednum == doomednum) return &d;
     return nullptr;
+}
+
+// ---- R_ProjectSprite (Task 7) ----
+bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprites,
+                     float px, float py, float sin, float cos, float /*eyeZ*/,
+                     float focal, int w, int h) {
+    float gx = static_cast<float>(t.x >> FRACBITS);
+    float gy = static_cast<float>(t.y >> FRACBITS);
+    float dx = gx - px, dy = gy - py;
+    float depth = dx * sin + dy * cos;     // forward (same basis as renderSeg::toCam)
+    float tx    = dx * cos - dy * sin;     // rightward
+    (void)h;
+    constexpr float nearZ = 0.01f;
+    if (depth <= nearZ) return false;
+
+    // rotation: vanilla ang = R_PointToAngle(view->thing) = angle from PLAYER to THING,
+    // minus the thing's facing. NB atan2 args are (gy-py, gx-px) = player->thing vector;
+    // the flipped (py-gy, px-gx) = thing->player would rotate every sprite by 4 (back<->front).
+    float viewAng = std::atan2f(gy - py, gx - px);
+    float thingRad = static_cast<float>(static_cast<double>(t.angle) * (6.283185307179586 / 4294967296.0));
+    int rotIdx = spriteRotationIndex(viewAng - thingRad);
+
+    SpriteCache::View v = sprites.resolve(t.sprname, t.frame, rotIdx);
+    if (!v.patch) return false;
+
+    float scale = 1.0f / depth;
+    float ppe = focal * scale;                       // pixels per texel
+    float xcenter = w / 2.0f + focal * tx * scale;
+    float xTrueLeft = xcenter - v.patch->leftoffset * ppe;
+    float xTrueRight = xTrueLeft + v.patch->width * ppe;
+    int x1 = static_cast<int>(std::floor(xTrueLeft));
+    int x2 = static_cast<int>(std::ceil(xTrueRight)) - 1;
+    if (x1 > x2) return false;
+    if (x2 < 0 || x1 >= w) return false;             // fully off-screen
+    x1 = std::max(0, x1); x2 = std::min(w - 1, x2);
+
+    out.depth = depth;
+    out.scale = scale;
+    out.x1 = x1; out.x2 = x2;
+    out.xTrueLeft = xTrueLeft;
+    out.gzt = static_cast<float>(t.z) + static_cast<float>(v.patch->topoffset);
+    out.patch = v.patch;
+    out.flip = v.flip;
+    out.light = t.fullbright ? 255 : t.light;
+    return true;
 }
