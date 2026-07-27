@@ -116,6 +116,7 @@ P4 让 E1M1 出现**静态精灵**：物品桶、装饰、敌人（静止）按�
 | `mobj_t` render-only | P5 补（拾取/移动）/P6 补（AI/状态机） |
 | spectre 无 fuzzy | 本期当普通精灵（可选后续） |
 | 武器 psprite | P5 |
+| 单列深度遮挡（窗/门开口里的精灵） | **已知限制**：`wallDepth[x]` 是 1D 每列最近实墙深度——近处双面窗框(D_near)+远处实墙开口(D_far)之间 D_near<D<D_far 的精灵会被误挡（开口里本应可见的精灵消失）。vanilla 用 per-seg silhouette（P4 范围外）；不比原 clip 设计更差。P5 实机若明显再细化 |
 
 ## 11. 不做（YAGNI）
 
