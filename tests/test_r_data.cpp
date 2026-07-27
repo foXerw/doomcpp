@@ -151,3 +151,18 @@ TEST_CASE("resolveFlatFrame cycles anim groups, leaves others") {
     CHECK(resolveFlatFrame("FLOOR0_1", 9) == "FLOOR0_1"); // not animated
     CHECK(resolveFlatFrame("F_SKY1", 3) == "F_SKY1");
 }
+
+TEST_CASE("decodePatch reads leftoffset/topoffset from the header") {
+    std::vector<uint32_t> pal(256, 0);
+    pal[1] = (0x11u<<24)|(0x22u<<16)|(0x33u<<8)|0xFFu;
+    // 1x1 patch, leftoffset=7, topoffset=9
+    std::vector<byte> b;
+    w16(b, 1); w16(b, 1); w16(b, 7); w16(b, 9);   // width,height,leftoffset,topoffset
+    w32(b, 12);                                     // columnofs[0] = 8 + 4 = 12
+    w8(b, 0); w8(b, 1); w8(b, 0); w8(b, 1); w8(b, 0); w8(b, 0xFF);  // post: top=0 len=1 pix=1
+    Patch p = decodePatch(b.data(), b.size(), pal.data());
+    CHECK(p.width == 1);
+    CHECK(p.height == 1);
+    CHECK(p.leftoffset == 7);
+    CHECK(p.topoffset == 9);
+}

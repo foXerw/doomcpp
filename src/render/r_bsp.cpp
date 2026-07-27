@@ -2,11 +2,13 @@
 #include "r_draw.h"
 #include "r_data.h"
 #include "r_plane.h"
+#include "r_things.h"
 #include "play/p_setup.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -18,10 +20,16 @@ struct Cam {
     uint32_t* fb;
     std::vector<int> ceilingClip;    // filled-down-from-top row; init -1
     std::vector<int> floorClip;      // filled-up-from-bottom row; init h
+    std::vector<float> wallDepth;    // nearest opaque-wall depth per column (init +inf); P4 sprite occlusion
     const TextureLookup* tex;
     PlaneCtx plane;                  // visplane rendering context
     std::vector<Visplane> vps;       // visplane list for this frame
     uint32_t tick = 0;               // animated-flat tick
+    // P4 sprite phase (optional; populated only when R_RenderView callers pass things).
+    const std::vector<mobj_t>* things = nullptr;
+    const SpriteCache* sprites = nullptr;
+    const std::vector<std::vector<int>>* thingsBySubsec = nullptr;
+    std::vector<vissprite_t> vissprites;
 };
 
 // P3.5a: node_t is now fixed_t; the float renderer reads coords as map units
@@ -61,6 +69,10 @@ void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffse
     }
     if (solid || upper) c.ceilingClip[x] = std::max(c.ceilingClip[x], std::min(static_cast<int>(std::floor(syBot)), c.h - 1));
     if (solid || lower) c.floorClip[x]   = std::min(c.floorClip[x],   std::max(static_cast<int>(std::ceil(syTop)),  0));
+    // P4: record nearest OPAQUE wall depth per column for sprite occlusion. masked-middle
+    // (fences/grates) is drawn with solid=upper=lower=false -> not recorded -> sprites behind
+    // a fence show through, matching vanilla (masked middles never occluded sprites).
+    if (solid || upper || lower) c.wallDepth[x] = std::min(c.wallDepth[x], colDepth);
 }
 
 void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
@@ -207,6 +219,18 @@ void renderSubsector(Cam& c, const MapData& m, int idx) {
         int s = ss.firstseg + i;
         if (s >= 0 && s < static_cast<int>(m.segs.size())) renderSeg(c, m, m.segs[s]);
     }
+    // P4: collect vissprites for this subsector's things. idx is the subsector index
+    // (callers pass child & ~NF_SUBSECTOR); use it directly into thingsBySubsec.
+    if (c.things && c.sprites && c.thingsBySubsec && idx >= 0 &&
+        idx < static_cast<int>(c.thingsBySubsec->size())) {
+        for (int ti : (*c.thingsBySubsec)[idx]) {
+            if (ti < 0 || ti >= static_cast<int>(c.things->size())) continue;
+            vissprite_t vs;
+            if (R_ProjectSprite(vs, (*c.things)[ti], *c.sprites,
+                                c.px, c.py, c.sin, c.cos, c.eyeZ, c.focal, c.w, c.h))
+                c.vissprites.push_back(vs);
+        }
+    }
 }
 void renderNode(Cam& c, const MapData& m, uint32_t idx) {
     if (idx & NF_SUBSECTOR) { renderSubsector(c, m, idx & ~NF_SUBSECTOR); return; }
@@ -220,7 +244,10 @@ void renderNode(Cam& c, const MapData& m, uint32_t idx) {
 
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
                   const TextureLookup& tex, float px, float py, float ang,
-                  float eyeZ, uint32_t animTick) {
+                  float eyeZ, uint32_t animTick,
+                  const std::vector<mobj_t>* things,
+                  const SpriteCache* sprites,
+                  const std::vector<std::vector<int>>* thingsBySubsec) {
     if (map.nodes.empty() || map.subsectors.empty()) return;
     Cam c;
     c.px = px; c.py = py; c.eyeZ = eyeZ;
@@ -229,12 +256,27 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     c.tex = &tex; c.tick = animTick;
     c.ceilingClip.assign(w, -1);
     c.floorClip.assign(w, h);
+    c.wallDepth.assign(w, std::numeric_limits<float>::infinity());
     c.plane.w = w; c.plane.h = h; c.plane.focal = c.focal; c.plane.eyeZ = eyeZ;
     c.plane.px = px; c.plane.py = py; c.plane.sin = c.sin; c.plane.cos = c.cos;
     c.plane.fb = fb;
     R_SetupPlaneTables(c.plane);
     c.vps.clear();
+    c.vissprites.clear();
+    c.things = things; c.sprites = sprites; c.thingsBySubsec = thingsBySubsec;
     for (int i = 0; i < w * h; ++i) fb[i] = 0x000000FFu;            // opaque black clear
     renderNode(c, map, static_cast<uint32_t>(map.nodes.size() - 1));
     R_DrawPlanes(c.plane, c.vps);
+    // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after visplanes.
+    // Per-column occlusion: wallDepth[x] holds the nearest opaque wall's depth at column x
+    // (recorded in drawCol for solid/upper/lower walls). R_DrawVisSprite skips any column whose
+    // nearest wall is at or closer than the sprite's depth, so a nearer wall correctly hides the
+    // sprite while the sprite overdraws wall/plane pixels where it is itself the nearer surface.
+    // ceilingClip/floorClip stay as the wall-renderer left them (no longer passed to sprites).
+    if (c.sprites && !c.vissprites.empty()) {
+        std::sort(c.vissprites.begin(), c.vissprites.end(),
+                  [](const vissprite_t& a, const vissprite_t& b){ return a.depth > b.depth; });
+        for (const vissprite_t& vs : c.vissprites)
+            R_DrawVisSprite(c.fb, c.w, c.h, vs, c.eyeZ, c.focal, c.wallDepth);
+    }
 }

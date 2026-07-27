@@ -9,13 +9,17 @@
 class WadFile;   // fwd
 
 // Decoded picture (column-major source format flattened to w*h RGBA).
-struct Patch { int width = 0, height = 0; std::vector<uint32_t> rgba; };
+// leftoffset/topoffset come from the patch_t header (used by sprites; walls ignore them).
+struct Patch { int width = 0, height = 0, leftoffset = 0, topoffset = 0; std::vector<uint32_t> rgba; };
 
 // A composited wall texture (full-brightness RGBA; alpha 0 = no patch there).
 struct Texture { char name[9] = {0}; int width = 0, height = 0; std::vector<uint32_t> rgba; };
 
 // A decoded flat: 64x64 full-bright RGBA (alpha 0xFF).
 struct Flat { char name[9] = {0}; int width = 64, height = 64; std::vector<uint32_t> rgba; };
+
+// PLAYPAL -> 256-entry RGBA palette ((R<<24)|(G<<16)|(B<<8)|0xFF). Missing WAD -> all 0.
+std::array<uint32_t, 256> loadPalette(const WadFile& wad);
 
 // PNAMES: count + 8-byte names.
 std::vector<std::string> parsePnames(const byte* d, size_t n);

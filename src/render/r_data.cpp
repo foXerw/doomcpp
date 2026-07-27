@@ -21,6 +21,18 @@ std::string upper(std::string s) {
 }
 }
 
+std::array<uint32_t, 256> loadPalette(const WadFile& wad) {
+    std::array<uint32_t, 256> pal{};
+    auto raw = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
+    for (int i = 0; i < 256; ++i) {
+        if (static_cast<size_t>(i * 3 + 2) < raw.size())
+            pal[i] = (static_cast<uint32_t>(raw[i * 3]) << 24) |
+                     (static_cast<uint32_t>(raw[i * 3 + 1]) << 16) |
+                     (static_cast<uint32_t>(raw[i * 3 + 2]) << 8) | 0xFFu;
+    }
+    return pal;
+}
+
 std::vector<std::string> parsePnames(const byte* d, size_t n) {
     if (n < 4) I_Error("parsePnames: too small");
     int count = rd_i32(d);
@@ -47,6 +59,8 @@ Patch decodePatch(const byte* data, size_t n, const uint32_t* palette) {
     if (width < 0 || height < 0) I_Error("decodePatch: negative dimensions");
     patch.width = width;
     patch.height = height;
+    patch.leftoffset = rd_i16(data + 4);
+    patch.topoffset  = rd_i16(data + 6);
     patch.rgba.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0u);  // transparent
     for (int col = 0; col < width; ++col) {
         const byte* base = data + 8;
@@ -167,16 +181,7 @@ std::string resolveFlatFrame(const std::string& name, uint32_t tick) {
 }
 
 TextureLookup::TextureLookup(const WadFile& wad) {
-    // PLAYPAL -> palette_ (first 256 entries; RGB -> RGBA opaque)
-    auto pal = const_cast<WadFile&>(wad).readLumpByName("PLAYPAL");
-    for (int i = 0; i < 256; ++i) {
-        if (static_cast<size_t>(i * 3 + 2) < pal.size())
-            palette_[i] = (static_cast<uint32_t>(pal[i * 3]) << 24) |
-                          (static_cast<uint32_t>(pal[i * 3 + 1]) << 16) |
-                          (static_cast<uint32_t>(pal[i * 3 + 2]) << 8) | 0xFFu;
-        else
-            palette_[i] = 0u;
-    }
+    palette_ = loadPalette(wad);
 
     // PNAMES
     auto pn = const_cast<WadFile&>(wad).readLumpByName("PNAMES");
@@ -188,9 +193,9 @@ TextureLookup::TextureLookup(const WadFile& wad) {
         if (idx < 0 || idx >= static_cast<int>(patches.size())) return;
         if (patches[idx].width != 0 || patches[idx].height != 0) return;   // decoded
         int lump = const_cast<WadFile&>(wad).checkNumForName(pnames[idx]);
-        if (lump < 0) { patches[idx] = Patch{0, 0, {}}; return; }
+        if (lump < 0) { patches[idx] = Patch{0, 0, 0, 0, {}}; return; }
         auto raw = const_cast<WadFile&>(wad).readLump(lump);
-        patches[idx] = raw.empty() ? Patch{0, 0, {}} : decodePatch(raw.data(), raw.size(), palette_.data());
+        patches[idx] = raw.empty() ? Patch{0, 0, 0, 0, {}} : decodePatch(raw.data(), raw.size(), palette_.data());
     };
 
     auto loadLumpDefs = [&](const char* lumpName) {
