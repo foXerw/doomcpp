@@ -13,6 +13,7 @@
 #include "platform/i_video.h"
 #include "play/info.h"
 #include "play/p_setup.h"
+#include "play/p_tick.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
@@ -109,29 +110,9 @@ int main(int argc, char** argv) {
                 MapData map = loadMap(wad, "E1M1");
                 TextureLookup tex(wad);
                 SpriteCache sprites(wad);
-                std::vector<mobj_t> mobs;
-                std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
-                for (size_t ti = 0; ti < map.things.size(); ++ti) {
-                    const thing_t& th = map.things[ti];
-                    int mt = mobjtypeForDoomednum(th.type);
-                    if (mt < 0) continue;
-                    if (mt == MT_PLAYER) continue;   // player start is the camera, not a world sprite (matches P4 spriteDefForType skip)
-                    const state_t& st = states[mobjinfo[mt].spawnstate];
-                    mobj_t m;
-                    m.x = static_cast<fixed_t>(th.x) << FRACBITS;
-                    m.y = static_cast<fixed_t>(th.y) << FRACBITS;
-                    m.angle = degreesToBam(th.angleDeg);
-                    std::memcpy(m.sprname, sprnames[st.sprite], 5);     // 4 字符 + NUL
-                    m.frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
-                    m.fullbright = (st.frame & FF_FULLBRIGHT) != 0;
-                    int ss = R_PointInSubsector(map, m.x, m.y);
-                    int sec = sectorOf(map, ss);
-                    m.z    = (sec >= 0) ? (static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS) : 0;
-                    m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
-                    mobs.push_back(m);
-                    if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
-                        thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
-                }
+                World w; w.map = &map; w.bm = &map.blockmap;
+                P_SetupLevel(w, map);
+                P_BuildThingsBySubsec(w);
                 fixed_t px, py; angle_t ang;
                 if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
                 if (i + 3 < argc) {   // optional DOOM-angle override (degrees)
@@ -151,9 +132,14 @@ int main(int argc, char** argv) {
                 R_RenderView(fb.data(), FW, FH, map, tex,
                              static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                              bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
-                             &mobs, &sprites, &thingsBySubsec);
+                             &sprites, &w.thingsBySubsec);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
-                std::cout << "wrote " << argv[i + 2] << " (mobs=" << mobs.size() << ")\n";
+                // Rendered mobs exclude the player (camera): P_SetupLevel spawns it into w.mobjs
+                // as w.player.mo, but P_BuildThingsBySubsec skips it from the render bins. The
+                // brief's literal w.mobjs.size() would report 227 (incl. player); subtracting the
+                // player preserves the P4 N=226 regression sentinel.
+                std::cout << "wrote " << argv[i + 2] << " (mobs="
+                          << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
                 return 0;
             }
         }
@@ -164,29 +150,8 @@ int main(int argc, char** argv) {
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
         SpriteCache sprites(wad);
-        std::vector<mobj_t> mobs;
-        std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
-        for (size_t ti = 0; ti < map.things.size(); ++ti) {
-            const thing_t& th = map.things[ti];
-            int mt = mobjtypeForDoomednum(th.type);
-            if (mt < 0) continue;
-            if (mt == MT_PLAYER) continue;   // player start is the camera, not a world sprite (matches P4 spriteDefForType skip)
-            const state_t& st = states[mobjinfo[mt].spawnstate];
-            mobj_t m;
-            m.x = static_cast<fixed_t>(th.x) << FRACBITS;
-            m.y = static_cast<fixed_t>(th.y) << FRACBITS;
-            m.angle = degreesToBam(th.angleDeg);
-            std::memcpy(m.sprname, sprnames[st.sprite], 5);     // 4 字符 + NUL
-            m.frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
-            m.fullbright = (st.frame & FF_FULLBRIGHT) != 0;
-            int ss = R_PointInSubsector(map, m.x, m.y);
-            int sec = sectorOf(map, ss);
-            m.z    = (sec >= 0) ? (static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS) : 0;
-            m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
-            mobs.push_back(m);
-            if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
-                thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
-        }
+        World w; w.map = &map; w.bm = &map.blockmap;
+        P_SetupLevel(w, map);
         Player p;
         {   fixed_t sx, sy; angle_t sang;
             if (!playerStart(map, sx, sy, sang)) { sx = 0; sy = 0; sang = 0; }
@@ -217,10 +182,11 @@ int main(int argc, char** argv) {
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
                 ++ticCount;
             }
+            P_BuildThingsBySubsec(w);
             R_RenderView(fb.data(), FB_W, FB_H, map, tex,
                          static_cast<float>(p.x >> FRACBITS), static_cast<float>(p.y >> FRACBITS),
                          bamToRendererRad(p.angle), static_cast<float>(p.viewz >> FRACBITS),
-                         ticCount, &mobs, &sprites, &thingsBySubsec);
+                         ticCount, &sprites, &w.thingsBySubsec);
             i_video::present(fb.data());
         }
 

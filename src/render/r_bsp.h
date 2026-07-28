@@ -4,7 +4,7 @@
 
 struct MapData;
 class TextureLookup;
-struct mobj_t;          // r_things.h
+struct mobj_t;          // p_mobj.h
 class SpriteCache;       // r_things.h
 struct vissprite_t;      // r_things.h
 
@@ -16,6 +16,5 @@ struct vissprite_t;      // r_things.h
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
                   const TextureLookup& tex, float px, float py, float ang,
                   float eyeZ, uint32_t animTick,
-                  const std::vector<mobj_t>* things = nullptr,
                   const SpriteCache* sprites = nullptr,
-                  const std::vector<std::vector<int>>* thingsBySubsec = nullptr);
+                  const std::vector<std::vector<const mobj_t*>>* thingsBySubsec = nullptr);
