@@ -24,6 +24,7 @@ add_library(doomcore STATIC
     src/play/p_setup.cpp
     src/play/p_maputl.cpp
     src/play/p_map.cpp
+    src/play/info.cpp
     src/render/r_draw.cpp
     src/render/r_data.cpp
     src/render/r_plane.cpp
