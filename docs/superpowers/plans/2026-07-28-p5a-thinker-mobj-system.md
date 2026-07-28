@@ -279,7 +279,6 @@ const state_t states[] = {
 // physically simulates MT_PLAYER via direct displacement and MT_BARREL when tossed);
 // items/decorations are MF_NOBLOCKMAP|MF_NOGRAVITY (inert in P5a). pain/death fields
 // are placeholder S_NULL until P5b ports real state chains.
-#define R16 (16<<FRACBITS),  // helper: 16-unit radius/height arg shorthand (unused macro kept short)
 const mobjinfo_t mobjinfo[] = {
     // doomednum, spawnstate, health, radius, height, speed, mass, flags, seestate,painstate,meleestate,missilestate,deathstate,xdeathstate, painchance,damage,reactiontime
     /* MT_PLAYER     */ {1,    S_PLAY,    100, 16<<FRACBITS, 56<<FRACBITS, 24<<FRACBITS, 100, MF_SOLID|MF_DROPOFF,  S_NULL,S_NULL,S_NULL,S_NULL,S_NULL,S_NULL, 0,0,8 },
@@ -1213,7 +1212,7 @@ constexpr fixed_t STOPSPEED = 0x1000;     // vanilla p_mobj.c
 constexpr fixed_t FRICTION  = 0xe800;     // vanilla ORIG_FRICTION
 constexpr fixed_t GRAVITY   = FRACUNIT;   // P5a 采用值（1 map unit/tic²）；vanilla 确切值实现期对照 p_mobj.c 校准——物理测试为定性，常量可调
 
-fixed_t apx(fixed_t dx, fixed_t dy) { dx=std::abs(dx); dy=std::abs(dy);   // P_AproxDistance
+fixed_t apx(fixed_t dx, fixed_t dy) { dx=std::abs(dx); dy=std::abs(dy);   // P_AproxDistance 的本地副本（p_map.cpp 中是 static 未导出）
     if (dx<dy) return dx+dy-(dx>>1); return dx+dy-(dy>>1); }
 }
 
