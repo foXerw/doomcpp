@@ -11,9 +11,10 @@ static fixed_t P_AproxDistance(fixed_t dx, fixed_t dy) {
     return dx + dy - (dy >> 1);
 }
 
-PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, fixed_t x, fixed_t y) {
+PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, const mobj_t& mo, fixed_t x, fixed_t y) {
     PosCheck pc;
-    BBox bb{ x - PLAYERRADIUS, x + PLAYERRADIUS, y - PLAYERRADIUS, y + PLAYERRADIUS };
+    fixed_t r = mo.info ? mo.info->radius : PLAYERRADIUS;
+    BBox bb{ x - r, x + r, y - r, y + r };
 
     int sec = sectorOf(m, R_PointInSubsector(m, x, y));
     if (sec < 0) { pc.ok = false; return pc; }
@@ -54,40 +55,44 @@ PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, fixed_t x, fixed_
     return pc;
 }
 
-bool P_TryMove(const MapData& m, const Blockmap& bm, Player& p, fixed_t nx, fixed_t ny) {
-    PosCheck pc = P_CheckPosition(m, bm, nx, ny);
+bool P_TryMove(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t nx, fixed_t ny) {
+    PosCheck pc = P_CheckPosition(m, bm, mo, nx, ny);
     if (!pc.ok) return false;
-    if (pc.ceilingz - pc.floorz < PLAYERHEIGHT) return false;   // doesn't fit vertically
-    if (pc.ceilingz - p.floorz  < PLAYERHEIGHT) return false;   // not enough headroom
-    if (pc.floorz   - p.floorz  > STEP_LIMIT)   return false;   // step up too high
+    fixed_t h = mo.info ? mo.info->height : PLAYERHEIGHT;
+    if (pc.ceilingz - pc.floorz < h) return false;   // doesn't fit vertically
+    if (pc.ceilingz - mo.floorz  < h) return false;   // not enough headroom
+    if (pc.floorz   - mo.floorz  > STEP_LIMIT) return false;   // step up too high
     // MT_PLAYER carries MF_DROPOFF -> exempt from dropoff gate (vanilla). dropoffz
     // is still tracked for monster AI in P6.
-    p.x = nx; p.y = ny;
-    p.floorz = pc.floorz;
-    p.ceilingz = pc.ceilingz;
+    mo.x = nx; mo.y = ny;
+    mo.floorz   = pc.floorz;
+    mo.ceilingz = pc.ceilingz;
     return true;
 }
 
-bool P_TrySlide(const MapData& m, const Blockmap& bm, Player& p, fixed_t dx, fixed_t dy) {
-    if (P_TryMove(m, bm, p, p.x + dx, p.y + dy)) return true;
-    if (dx != 0 && P_TryMove(m, bm, p, p.x + dx, p.y)) return true;
-    if (dy != 0 && P_TryMove(m, bm, p, p.x, p.y + dy)) return true;
+bool P_TrySlide(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t dx, fixed_t dy) {
+    if (P_TryMove(m, bm, mo, mo.x + dx, mo.y + dy)) return true;
+    if (dx != 0 && P_TryMove(m, bm, mo, mo.x + dx, mo.y)) return true;
+    if (dy != 0 && P_TryMove(m, bm, mo, mo.x, mo.y + dy)) return true;
     return false;
 }
 
-void P_CalcHeight(const MapData& m, Player& p) {
-    if (p.sector < 0 || p.sector >= static_cast<int>(m.sectors.size())) return;
-    // Eye-height tracks p.floorz (bbox opening floor = vanilla tmfloorz). P3d fix preserved.
-    fixed_t target = p.floorz + VIEWHEIGHT;
+void P_CalcHeight(const MapData& m, player_t& p) {
+    if (!p.mo) return;
+    // Eye-height tracks mo->floorz (bbox opening floor = vanilla tmfloorz). P3d fix preserved.
+    fixed_t target = p.mo->floorz + VIEWHEIGHT;
     p.viewz += (target - p.viewz) >> 3;                 // ~vanilla deltaviewheight >> 3
-    fixed_t cap = (static_cast<fixed_t>(m.sectors[p.sector].ceilingheight) << FRACBITS) - (4 << FRACBITS);
+    int sec = (p.mo->subsector >= 0) ? sectorOf(m, p.mo->subsector) : -1;
+    fixed_t cap = (sec >= 0 ? (static_cast<fixed_t>(m.sectors[sec].ceilingheight) << FRACBITS)
+                            : (static_cast<fixed_t>(1 << 30)) ) - (4 << FRACBITS);
     if (p.viewz > cap) p.viewz = cap;
 }
 
-void P_MovePlayer(const MapData& m, const Blockmap& bm, Player& p,
+void P_MovePlayer(const MapData& m, const Blockmap& bm, player_t& p,
                   fixed_t forward, fixed_t strafe, angle_t turn) {
-    p.angle += turn;   // uint32 modular wraparound
-    int fi = (p.angle >> ANGLETOFINESHIFT) & FINEMASK;
+    mobj_t* mo = p.mo;
+    mo->angle += turn;   // uint32 modular wraparound
+    int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
     fixed_t fc = finecosine[fi];   // forward = (cos, sin) = vanilla
     fixed_t fs = finesine[fi];
     // forwardVec = (fc, fs); rightVec = (fs, -fc). Strafe sign matches P2d net direction.
@@ -99,9 +104,7 @@ void P_MovePlayer(const MapData& m, const Blockmap& bm, Player& p,
         dx = FixedMul(dx, scale);
         dy = FixedMul(dy, scale);
     }
-    P_TrySlide(m, bm, p, dx, dy);
-    int ss = R_PointInSubsector(m, p.x, p.y);
-    p.subsector = ss;
-    p.sector = sectorOf(m, ss);
+    P_TrySlide(m, bm, *mo, dx, dy);
+    mo->subsector = R_PointInSubsector(m, mo->x, mo->y);
     P_CalcHeight(m, p);
 }

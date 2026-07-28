@@ -3,15 +3,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
 #include "core/i_system.h"
-#include "core/m_tables.h"
+#include "core/m_fixed.h"     // FixedMul
+#include "core/m_tables.h"    // finecosine/finesine/R_InitTables
 #include "platform/i_video.h"
+#include "play/info.h"
 #include "play/p_setup.h"
+#include "play/p_tick.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
@@ -108,27 +110,9 @@ int main(int argc, char** argv) {
                 MapData map = loadMap(wad, "E1M1");
                 TextureLookup tex(wad);
                 SpriteCache sprites(wad);
-                std::vector<mobj_t> mobs;
-                std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
-                for (size_t ti = 0; ti < map.things.size(); ++ti) {
-                    const thing_t& th = map.things[ti];
-                    const SpriteDef* def = spriteDefForType(th.type);
-                    if (!def) continue;
-                    mobj_t m;
-                    m.x = static_cast<fixed_t>(th.x) << FRACBITS;
-                    m.y = static_cast<fixed_t>(th.y) << FRACBITS;
-                    m.angle = degreesToBam(th.angleDeg);
-                    std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
-                    m.frame = def->frame;
-                    m.fullbright = def->fullbright;
-                    int ss = R_PointInSubsector(map, m.x, m.y);
-                    int sec = sectorOf(map, ss);
-                    m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
-                    m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
-                    mobs.push_back(m);
-                    if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
-                        thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
-                }
+                World w; w.map = &map; w.bm = &map.blockmap;
+                P_SetupLevel(w, map);
+                P_BuildThingsBySubsec(w);
                 fixed_t px, py; angle_t ang;
                 if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
                 if (i + 3 < argc) {   // optional DOOM-angle override (degrees)
@@ -148,50 +132,86 @@ int main(int argc, char** argv) {
                 R_RenderView(fb.data(), FW, FH, map, tex,
                              static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                              bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
-                             &mobs, &sprites, &thingsBySubsec);
+                             &sprites, &w.thingsBySubsec);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
-                std::cout << "wrote " << argv[i + 2] << " (mobs=" << mobs.size() << ")\n";
+                // Rendered mobs exclude the player (camera): P_SetupLevel spawns it into w.mobjs
+                // as w.player.mo, but P_BuildThingsBySubsec skips it from the render bins. The
+                // brief's literal w.mobjs.size() would report 227 (incl. player); subtracting the
+                // player preserves the P4 N=226 regression sentinel.
+                std::cout << "wrote " << argv[i + 2] << " (mobs="
+                          << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
+                return 0;
+            }
+            if (std::string(argv[i]) == "--tickdump" && i + 3 < argc) {
+                // P5a physics visualization (headless): load E1M1, spawn a barrel
+                // with forward+up momentum at a fixed (or CLI-overridden) spot,
+                // run n thinker tics, print before/after z/momz/x, then write a
+                // frame from the player-start camera. Interactive G-key toss is
+                // verified by the human; this is the automated proxy.
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                World w; w.map = &map; w.bm = &map.blockmap;
+                P_SetupLevel(w, map);
+                // Optional CLI overrides: [x y vx vy vz] at argv[i+4 .. i+8].
+                // Each condition `i+k < argc` gates exactly argv[i+k] (the brief's
+                // `i+k+1 < argc` forms were off-by-one too strict and read the vy
+                // slot for momz; corrected here to match the documented signature).
+                fixed_t bx = (i + 4 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS))
+                                            : 0 << FRACBITS;
+                fixed_t by = (i + 5 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS))
+                                            : 304 << FRACBITS;
+                mobj_t* b = P_SpawnMobj(w, bx, by, 0, MT_BARREL);
+                int sec0 = sectorOf(map, b->subsector);
+                b->floorz   = (sec0 >= 0) ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS) : 0;
+                b->ceilingz = (sec0 >= 0) ? (static_cast<fixed_t>(map.sectors[sec0].ceilingheight) << FRACBITS)
+                                          : (128 << FRACBITS);
+                b->z = b->floorz;
+                b->momx = (i + 6 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 6]) * (1 << FRACBITS))
+                                         : (10 << FRACBITS);
+                b->momy = (i + 7 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 7]) * (1 << FRACBITS))
+                                         : 0;
+                b->momz = (i + 8 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 8]) * (1 << FRACBITS))
+                                         : (9 << FRACBITS);
+                int n = std::atoi(argv[i + 3]);
+                std::cout << "before: z=" << (b->z >> FRACBITS)
+                          << " momz=" << (b->momz >> FRACBITS)
+                          << " x=" << (b->x >> FRACBITS)
+                          << " momx=" << (b->momx >> FRACBITS) << "\n";
+                for (int t = 0; t < n; ++t) P_RunThinkers(w);
+                std::cout << "after(" << n << " tics): z=" << (b->z >> FRACBITS)
+                          << " momz=" << (b->momz >> FRACBITS)
+                          << " x=" << (b->x >> FRACBITS) << "\n";
+                // dump a frame from the player-start camera
+                fixed_t px, py; angle_t ang;
+                playerStart(map, px, py, ang);
+                P_BuildThingsBySubsec(w);
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                R_RenderView(fb.data(), FW, FH, map, tex,
+                             static_cast<float>(px >> FRACBITS),
+                             static_cast<float>(py >> FRACBITS),
+                             bamToRendererRad(ang),
+                             static_cast<float>(w.player.viewz >> FRACBITS),
+                             w.tic, &sprites, &w.thingsBySubsec);
+                writeBMP(argv[i + 2], fb.data(), FW, FH);
+                std::cout << "wrote " << argv[i + 2] << "\n";
                 return 0;
             }
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P3.5a fixed-point collision)  WASD move, arrows turn, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P5a thinker/mobj)  WASD move, arrows turn, G toss barrel, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
         SpriteCache sprites(wad);
-        std::vector<mobj_t> mobs;
-        std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
-        for (size_t ti = 0; ti < map.things.size(); ++ti) {
-            const thing_t& th = map.things[ti];
-            const SpriteDef* def = spriteDefForType(th.type);
-            if (!def) continue;
-            mobj_t m;
-            m.x = static_cast<fixed_t>(th.x) << FRACBITS;
-            m.y = static_cast<fixed_t>(th.y) << FRACBITS;
-            m.angle = degreesToBam(th.angleDeg);
-            std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
-            m.frame = def->frame;
-            m.fullbright = def->fullbright;
-            int ss = R_PointInSubsector(map, m.x, m.y);
-            int sec = sectorOf(map, ss);
-            m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
-            m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
-            mobs.push_back(m);
-            if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
-                thingsBySubsec[ss].push_back(static_cast<int>(mobs.size()) - 1);
-        }
-        Player p;
-        {   fixed_t sx, sy; angle_t sang;
-            if (!playerStart(map, sx, sy, sang)) { sx = 0; sy = 0; sang = 0; }
-            p.x = sx; p.y = sy; p.angle = sang;
-            int ss = R_PointInSubsector(map, p.x, p.y); p.subsector = ss; p.sector = sectorOf(map, ss);
-            p.floorz = (p.sector >= 0) ? (static_cast<fixed_t>(map.sectors[p.sector].floorheight) << FRACBITS) : 0;
-            p.viewz = p.floorz + VIEWHEIGHT; }
+        World w; w.map = &map; w.bm = &map.blockmap;
+        P_SetupLevel(w, map);   // spawns w.player.mo (x/y/angle/floorz/subsector) + sets w.player.viewz
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - P3.5a")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - P5a")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
         const fixed_t moveSpeed = 5 << FRACBITS;        // per 35Hz tic
@@ -202,20 +222,43 @@ int main(int argc, char** argv) {
         uint32_t prev = SDL_GetTicks(), acc = 0, ticCount = 0;
         while (running) {
             running = i_video::pollEvents(in);
+            // P5a toss milestone: G spawns an MT_BARREL in front of the player
+            // with forward+up momentum (edge-triggered; handled at most once per
+            // frame, OUTSIDE the tic batch so a held key never spawns 4×/frame).
+            if (in.spawn) {
+                in.spawn = false;
+                mobj_t* mo = w.player.mo;
+                int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                fixed_t fc = finecosine[fi], fs = finesine[fi];
+                fixed_t dist = 48 << FRACBITS;
+                mobj_t* b = P_SpawnMobj(w,
+                                        mo->x + FixedMul(fc, dist),
+                                        mo->y + FixedMul(fs, dist),
+                                        mo->floorz, MT_BARREL);
+                b->floorz = mo->floorz;
+                b->ceilingz = mo->ceilingz;
+                b->momx = FixedMul(fc, 10 << FRACBITS);
+                b->momy = FixedMul(fs, 10 << FRACBITS);
+                b->momz = 9 << FRACBITS;   // upward toss
+            }
             uint32_t now = SDL_GetTicks();
             acc += (now - prev); prev = now;
             for (int n = 0; n < 4 && acc >= TIC_MS; ++n, acc -= TIC_MS) {
                 int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
                 int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
-                P_MovePlayer(map, map.blockmap, p,
+                P_MovePlayer(map, map.blockmap, w.player,
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                P_RunThinkers(w);
                 ++ticCount;
             }
+            P_BuildThingsBySubsec(w);
             R_RenderView(fb.data(), FB_W, FB_H, map, tex,
-                         static_cast<float>(p.x >> FRACBITS), static_cast<float>(p.y >> FRACBITS),
-                         bamToRendererRad(p.angle), static_cast<float>(p.viewz >> FRACBITS),
-                         ticCount, &mobs, &sprites, &thingsBySubsec);
+                         static_cast<float>(w.player.mo->x >> FRACBITS),
+                         static_cast<float>(w.player.mo->y >> FRACBITS),
+                         bamToRendererRad(w.player.mo->angle),
+                         static_cast<float>(w.player.viewz >> FRACBITS),
+                         ticCount, &sprites, &w.thingsBySubsec);
             i_video::present(fb.data());
         }
 
