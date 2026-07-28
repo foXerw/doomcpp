@@ -173,6 +173,7 @@ int main(int argc, char** argv) {
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
                 P_MovePlayer(map, map.blockmap, w.player,
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                P_RunThinkers(w);
                 ++ticCount;
             }
             P_BuildThingsBySubsec(w);

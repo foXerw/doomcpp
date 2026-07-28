@@ -55,4 +55,7 @@ void P_BuildThingsBySubsec(World& w) {
     }
 }
 
-void P_RunThinkers(World&) { /* Task 6 */ }
+void P_RunThinkers(World& w) {
+    ++w.tic;
+    for (mobj_t& mo : w.mobjs) P_MobjThinker(w, mo);
+}

@@ -22,3 +22,7 @@ struct mobj_t {
     bool    fullbright = false;
     int     light = 160;
 };
+
+struct World;   // fwd（p_tick.h 完整定义；避免 p_mobj.h -> p_tick.h 循环 include）
+// Task 6：per-tic mobj thinker（动量/摩擦/重力/状态推进）。定义在 p_mobj.cpp。
+void P_MobjThinker(const World& w, mobj_t& mo);
