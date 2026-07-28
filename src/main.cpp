@@ -11,6 +11,7 @@
 #include "core/i_system.h"
 #include "core/m_tables.h"
 #include "platform/i_video.h"
+#include "play/info.h"
 #include "play/p_setup.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
@@ -112,18 +113,20 @@ int main(int argc, char** argv) {
                 std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
                 for (size_t ti = 0; ti < map.things.size(); ++ti) {
                     const thing_t& th = map.things[ti];
-                    const SpriteDef* def = spriteDefForType(th.type);
-                    if (!def) continue;
+                    int mt = mobjtypeForDoomednum(th.type);
+                    if (mt < 0) continue;
+                    if (mt == MT_PLAYER) continue;   // player start is the camera, not a world sprite (matches P4 spriteDefForType skip)
+                    const state_t& st = states[mobjinfo[mt].spawnstate];
                     mobj_t m;
                     m.x = static_cast<fixed_t>(th.x) << FRACBITS;
                     m.y = static_cast<fixed_t>(th.y) << FRACBITS;
                     m.angle = degreesToBam(th.angleDeg);
-                    std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
-                    m.frame = def->frame;
-                    m.fullbright = def->fullbright;
+                    std::memcpy(m.sprname, sprnames[st.sprite], 5);     // 4 字符 + NUL
+                    m.frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
+                    m.fullbright = (st.frame & FF_FULLBRIGHT) != 0;
                     int ss = R_PointInSubsector(map, m.x, m.y);
                     int sec = sectorOf(map, ss);
-                    m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
+                    m.z    = (sec >= 0) ? (static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS) : 0;
                     m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
                     mobs.push_back(m);
                     if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))
@@ -165,18 +168,20 @@ int main(int argc, char** argv) {
         std::vector<std::vector<int>> thingsBySubsec(map.subsectors.size());
         for (size_t ti = 0; ti < map.things.size(); ++ti) {
             const thing_t& th = map.things[ti];
-            const SpriteDef* def = spriteDefForType(th.type);
-            if (!def) continue;
+            int mt = mobjtypeForDoomednum(th.type);
+            if (mt < 0) continue;
+            if (mt == MT_PLAYER) continue;   // player start is the camera, not a world sprite (matches P4 spriteDefForType skip)
+            const state_t& st = states[mobjinfo[mt].spawnstate];
             mobj_t m;
             m.x = static_cast<fixed_t>(th.x) << FRACBITS;
             m.y = static_cast<fixed_t>(th.y) << FRACBITS;
             m.angle = degreesToBam(th.angleDeg);
-            std::memcpy(m.sprname, def->sprname, 4); m.sprname[4] = 0;
-            m.frame = def->frame;
-            m.fullbright = def->fullbright;
+            std::memcpy(m.sprname, sprnames[st.sprite], 5);     // 4 字符 + NUL
+            m.frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
+            m.fullbright = (st.frame & FF_FULLBRIGHT) != 0;
             int ss = R_PointInSubsector(map, m.x, m.y);
             int sec = sectorOf(map, ss);
-            m.z    = (sec >= 0) ? map.sectors[sec].floorheight : 0;
+            m.z    = (sec >= 0) ? (static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS) : 0;
             m.light = (sec >= 0) ? map.sectors[sec].lightlevel : 160;
             mobs.push_back(m);
             if (ss >= 0 && ss < static_cast<int>(thingsBySubsec.size()))

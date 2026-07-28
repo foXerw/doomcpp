@@ -1,5 +1,6 @@
 #pragma once
 #include "core/doomtype.h"
+#include "play/p_mobj.h"     // mobj_t (moved from here in P5a)
 #include "render/r_data.h"   // Patch
 #include <array>
 #include <string>
@@ -41,25 +42,6 @@ private:
 // Returns 0..7 (0 = facing viewer / front, 4 = back). Float equivalent of
 // vanilla `rot = (ang - thing->angle + (ANG45/2)*9) >> 29`.
 int spriteRotationIndex(float relAngRad);
-
-// ---- SpriteDef / mobj_t (Task 6) ----
-// doomednum -> spawn-state sprite/frame/fullbright, from vanilla info.c mobjinfo[].
-// spriteDefForType returns nullptr for non-renderable types (player/DM starts,
-// unknown) -> those things are skipped at mob-build time.
-struct SpriteDef { int doomednum; const char* sprname; char frame; bool fullbright; };
-const SpriteDef* spriteDefForType(int doomednum);
-
-// Render-only mobj: carries the resolved sprite name/frame/fullbright/light so
-// the renderer needs no global table. P5/P6 add health/momentum/state.
-struct mobj_t {
-    fixed_t x = 0, y = 0;        // 16.16
-    int     z = 0;               // sector floor (map units)
-    angle_t angle = 0;           // BAM
-    char    sprname[5] = {0};    // resolved (e.g. "BAR1")
-    char    frame = 'A';         // 'A'..
-    bool    fullbright = false;
-    int     light = 160;         // sector lightlevel 0..255
-};
 
 // ---- vissprite_t + R_ProjectSprite (Task 7) ----
 // A projected, screen-space sprite: the bridge between R_Project (world -> screen)
