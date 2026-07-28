@@ -151,14 +151,7 @@ int main(int argc, char** argv) {
         TextureLookup tex(wad);
         SpriteCache sprites(wad);
         World w; w.map = &map; w.bm = &map.blockmap;
-        P_SetupLevel(w, map);
-        Player p;
-        {   fixed_t sx, sy; angle_t sang;
-            if (!playerStart(map, sx, sy, sang)) { sx = 0; sy = 0; sang = 0; }
-            p.x = sx; p.y = sy; p.angle = sang;
-            int ss = R_PointInSubsector(map, p.x, p.y); p.subsector = ss; p.sector = sectorOf(map, ss);
-            p.floorz = (p.sector >= 0) ? (static_cast<fixed_t>(map.sectors[p.sector].floorheight) << FRACBITS) : 0;
-            p.viewz = p.floorz + VIEWHEIGHT; }
+        P_SetupLevel(w, map);   // spawns w.player.mo (x/y/angle/floorz/subsector) + sets w.player.viewz
 
         constexpr int FB_W = 320, FB_H = 200;
         if (!i_video::init(FB_W, FB_H, "doomcpp - P3.5a")) return 1;
@@ -178,14 +171,16 @@ int main(int argc, char** argv) {
                 int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
                 int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
-                P_MovePlayer(map, map.blockmap, p,
+                P_MovePlayer(map, map.blockmap, w.player,
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
                 ++ticCount;
             }
             P_BuildThingsBySubsec(w);
             R_RenderView(fb.data(), FB_W, FB_H, map, tex,
-                         static_cast<float>(p.x >> FRACBITS), static_cast<float>(p.y >> FRACBITS),
-                         bamToRendererRad(p.angle), static_cast<float>(p.viewz >> FRACBITS),
+                         static_cast<float>(w.player.mo->x >> FRACBITS),
+                         static_cast<float>(w.player.mo->y >> FRACBITS),
+                         bamToRendererRad(w.player.mo->angle),
+                         static_cast<float>(w.player.viewz >> FRACBITS),
                          ticCount, &sprites, &w.thingsBySubsec);
             i_video::present(fb.data());
         }
