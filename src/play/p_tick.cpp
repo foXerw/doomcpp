@@ -35,7 +35,6 @@ void P_SetupLevel(World& w, const MapData& m) {
     }
     // 玩家初始 viewz
     if (w.player.mo) {
-        w.player.mo->floorz = (w.player.mo->floorz ? w.player.mo->floorz : 0);
         w.player.viewz = w.player.mo->floorz + VIEWHEIGHT;
     }
 }

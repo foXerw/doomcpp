@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -212,7 +211,7 @@ int main(int argc, char** argv) {
         P_SetupLevel(w, map);   // spawns w.player.mo (x/y/angle/floorz/subsector) + sets w.player.viewz
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - P3.5a")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - P5a")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
         const fixed_t moveSpeed = 5 << FRACBITS;        // per 35Hz tic

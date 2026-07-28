@@ -10,8 +10,8 @@ struct vissprite_t;      // r_things.h
 
 // Render one frame: textured walls (BSP front-to-back, per-column clip occlusion) with
 // distance shading, then visplane floor/ceiling flats (P3b). animTick drives animated flats.
-// P4: optional things/sprites/thingsBySubsec enable sprite collection (during BSP traversal)
-// and back-to-front vissprite draw AFTER visplanes. When all three are nullptr (default),
+// P4: optional sprites + thingsBySubsec enable sprite collection (during BSP traversal)
+// and back-to-front vissprite draw AFTER visplanes. When both are nullptr (default),
 // the sprite phase is skipped entirely -> rendering identical to pre-P4.
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
                   const TextureLookup& tex, float px, float py, float ang,

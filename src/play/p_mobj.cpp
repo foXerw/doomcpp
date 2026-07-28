@@ -4,7 +4,6 @@
 #include "p_setup.h"
 #include "p_map.h"          // P_TryMove, MAXMOVE, VIEWHEIGHT
 #include "core/m_fixed.h"   // FixedMul/FixedDiv
-#include "core/m_tables.h"
 #include "info.h"
 #include <cstdlib>
 #include <cstring>

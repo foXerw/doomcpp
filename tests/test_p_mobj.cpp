@@ -5,7 +5,6 @@
 #include "play/p_setup.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
-#include <cmath>
 #include <string>
 
 TEST_CASE("P_SpawnMobj inits fields from mobjinfo + spawnstate render cache") {
