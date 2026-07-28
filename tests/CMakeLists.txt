@@ -9,6 +9,8 @@ add_executable(doomcpp_tests
     test_p_setup.cpp
     test_p_maputl.cpp
     test_p_map.cpp
+    test_p_mobj.cpp
+    test_p_tick.cpp
     test_r_draw.cpp
     test_r_data.cpp
     test_r_plane.cpp
