@@ -4,7 +4,7 @@ A faithful, from-scratch reimplementation of the classic DOOM (1993) engine in
 modern C++17, using SDL2 for windowing/input/audio and software rendering
 matching the original renderer's algorithms.
 
-**Status:** P4 — sprite rendering (`render/r_things`): `SpriteCache` decodes `S_START`..`S_END` lumps (patch + leftoffset/topoffset) indexed by sprite/frame/8-way-rotation with mirror; render-only `mobj_t` built from THINGS via a `SpriteDef` table (doomednum→sprite, E1M1 coverage); `R_ProjectSprite` (float `toCam` projection, `atan2f` rotation select) + `R_DrawVisSprite` (per-column masked draw, distance shade, flip); collected during BSP traversal and drawn back-to-front after visplanes, occluded by nearer walls via a per-column `wallDepth` array. The renderer (`r_bsp`/`r_plane`/`r_things`) stays **float** (doomcpp's own from-scratch code; a documented permanent deviation — the collision/play code is 16.16 fixed-point). Earlier: P3.5 collision/movement fixed-point + `FixedSqrt`; pit HOM band fix (lower-wall/bottomtexture condition was inverted vs vanilla).
+**Status:** P5a — thinker/mobj system: a live `mobj_t` list driven by a per-tic thinker chain (`P_RunThinkers` → `P_MobjThinker` applies momentum/friction/gravity via `P_XYMovement`/`P_ZMovement`); the player is a `mobj_t` (`World::player.mo`) routed through the same generalized `P_TryMove` collision, and the renderer reads live mobj state each frame (`P_BuildThingsBySubsec` rebuilds the per-subsector render bins). Visible milestone: press **G** in-game to toss an `MT_BARREL` out the player's front that arcs up, lands, slides under friction, and stops against walls; `--tickdump <wad> <bmp> <n> [x y vx vz]` visualizes the physics headlessly (spawns a barrel, runs N thinker tics, prints z/momz/x before/after, writes a frame). Earlier: P4 sprite rendering (`render/r_things`: `SpriteCache` decodes `S_START`..`S_END` lumps indexed by sprite/frame/8-way-rotation with mirror; `R_ProjectSprite` + `R_DrawVisSprite` per-column masked draw + distance shade + flip; drawn back-to-front after visplanes, occluded by nearer walls via a per-column `wallDepth` array). The renderer (`r_bsp`/`r_plane`/`r_things`) stays **float** (doomcpp's own from-scratch code; a documented permanent deviation — the collision/play code is 16.16 fixed-point). Still earlier: P3.5 collision/movement fixed-point + `FixedSqrt`; pit HOM band fix (lower-wall/bottomtexture condition was inverted vs vanilla).
 
 ## Roadmap
 
@@ -18,6 +18,7 @@ matching the original renderer's algorithms.
 - [x] P3d 修复 (horizon-row seam + sky-fill-to-horizon + floorz stair-climb/eye-height; `--mapinfo`/`--sample`/`--dumpframe` teleport debug tooling)
 - [x] P3.5 碰撞定点 + 渲染器复刻(float) (angle_t/BAM + finesine/finecosine trig tables, node_t→fixed_t, p_map/p_maputl fixed-point collision + movement; renderer stays float as doomcpp's own reimplementation; FixedSqrt; pit HOM fix)
 - [x] P4 精灵 (r_things: SpriteCache S_START/S_END decode + install/resolve/mirror, SpriteDef doomednum→sprite table, render-only mobj_t, R_ProjectSprite float projection + atan2 8-way rotation, R_DrawVisSprite per-column masked draw + distance shade + flip, per-column wallDepth wall occlusion, drawn back-to-front after visplanes)
+- [x] P5a 思考者/mobj 系统（活对象 + 物理 + 抛桶里程碑）
 
 ## Build (Windows)
 

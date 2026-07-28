@@ -7,6 +7,7 @@ struct Input {
     bool forward=false, back=false;
     bool turnLeft=false, turnRight=false;
     bool strafeLeft=false, strafeRight=false;
+    bool spawn=false;   // P5a: edge-triggered (set on G KEYDOWN w/ repeat==0)
 };
 
 namespace i_video {

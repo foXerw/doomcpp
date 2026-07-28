@@ -9,7 +9,8 @@
 #include <utility>
 #include <vector>
 #include "core/i_system.h"
-#include "core/m_tables.h"
+#include "core/m_fixed.h"     // FixedMul
+#include "core/m_tables.h"    // finecosine/finesine/R_InitTables
 #include "platform/i_video.h"
 #include "play/info.h"
 #include "play/p_setup.h"
@@ -142,10 +143,67 @@ int main(int argc, char** argv) {
                           << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
                 return 0;
             }
+            if (std::string(argv[i]) == "--tickdump" && i + 3 < argc) {
+                // P5a physics visualization (headless): load E1M1, spawn a barrel
+                // with forward+up momentum at a fixed (or CLI-overridden) spot,
+                // run n thinker tics, print before/after z/momz/x, then write a
+                // frame from the player-start camera. Interactive G-key toss is
+                // verified by the human; this is the automated proxy.
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                World w; w.map = &map; w.bm = &map.blockmap;
+                P_SetupLevel(w, map);
+                // Optional CLI overrides: [x y vx vy vz] at argv[i+4 .. i+8].
+                // Each condition `i+k < argc` gates exactly argv[i+k] (the brief's
+                // `i+k+1 < argc` forms were off-by-one too strict and read the vy
+                // slot for momz; corrected here to match the documented signature).
+                fixed_t bx = (i + 4 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS))
+                                            : 0 << FRACBITS;
+                fixed_t by = (i + 5 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS))
+                                            : 304 << FRACBITS;
+                mobj_t* b = P_SpawnMobj(w, bx, by, 0, MT_BARREL);
+                int sec0 = sectorOf(map, b->subsector);
+                b->floorz   = (sec0 >= 0) ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS) : 0;
+                b->ceilingz = (sec0 >= 0) ? (static_cast<fixed_t>(map.sectors[sec0].ceilingheight) << FRACBITS)
+                                          : (128 << FRACBITS);
+                b->z = b->floorz;
+                b->momx = (i + 6 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 6]) * (1 << FRACBITS))
+                                         : (10 << FRACBITS);
+                b->momy = (i + 7 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 7]) * (1 << FRACBITS))
+                                         : 0;
+                b->momz = (i + 8 < argc) ? static_cast<fixed_t>(std::atof(argv[i + 8]) * (1 << FRACBITS))
+                                         : (9 << FRACBITS);
+                int n = std::atoi(argv[i + 3]);
+                std::cout << "before: z=" << (b->z >> FRACBITS)
+                          << " momz=" << (b->momz >> FRACBITS)
+                          << " x=" << (b->x >> FRACBITS)
+                          << " momx=" << (b->momx >> FRACBITS) << "\n";
+                for (int t = 0; t < n; ++t) P_RunThinkers(w);
+                std::cout << "after(" << n << " tics): z=" << (b->z >> FRACBITS)
+                          << " momz=" << (b->momz >> FRACBITS)
+                          << " x=" << (b->x >> FRACBITS) << "\n";
+                // dump a frame from the player-start camera
+                fixed_t px, py; angle_t ang;
+                playerStart(map, px, py, ang);
+                P_BuildThingsBySubsec(w);
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                R_RenderView(fb.data(), FW, FH, map, tex,
+                             static_cast<float>(px >> FRACBITS),
+                             static_cast<float>(py >> FRACBITS),
+                             bamToRendererRad(ang),
+                             static_cast<float>(w.player.viewz >> FRACBITS),
+                             w.tic, &sprites, &w.thingsBySubsec);
+                writeBMP(argv[i + 2], fb.data(), FW, FH);
+                std::cout << "wrote " << argv[i + 2] << "\n";
+                return 0;
+            }
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P3.5a fixed-point collision)  WASD move, arrows turn, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P5a thinker/mobj)  WASD move, arrows turn, G toss barrel, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
@@ -165,6 +223,25 @@ int main(int argc, char** argv) {
         uint32_t prev = SDL_GetTicks(), acc = 0, ticCount = 0;
         while (running) {
             running = i_video::pollEvents(in);
+            // P5a toss milestone: G spawns an MT_BARREL in front of the player
+            // with forward+up momentum (edge-triggered; handled at most once per
+            // frame, OUTSIDE the tic batch so a held key never spawns 4×/frame).
+            if (in.spawn) {
+                in.spawn = false;
+                mobj_t* mo = w.player.mo;
+                int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                fixed_t fc = finecosine[fi], fs = finesine[fi];
+                fixed_t dist = 48 << FRACBITS;
+                mobj_t* b = P_SpawnMobj(w,
+                                        mo->x + FixedMul(fc, dist),
+                                        mo->y + FixedMul(fs, dist),
+                                        mo->floorz, MT_BARREL);
+                b->floorz = mo->floorz;
+                b->ceilingz = mo->ceilingz;
+                b->momx = FixedMul(fc, 10 << FRACBITS);
+                b->momy = FixedMul(fs, 10 << FRACBITS);
+                b->momz = 9 << FRACBITS;   // upward toss
+            }
             uint32_t now = SDL_GetTicks();
             acc += (now - prev); prev = now;
             for (int n = 0; n < 4 && acc >= TIC_MS; ++n, acc -= TIC_MS) {

@@ -86,6 +86,10 @@ bool pollEvents(Input& input) {
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return false;
         if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) return false;
+        // P5a toss key: G, edge-triggered (repeat==0 so holding doesn't flood).
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_G &&
+            ev.key.repeat == 0)
+            input.spawn = true;
     }
     return true;
 }
