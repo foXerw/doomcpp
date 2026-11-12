@@ -54,7 +54,7 @@ static void P_ZMovement(const World& w, mobj_t& mo) {
     if (mo.z >= cz) { mo.z = cz; if (mo.momz > 0) mo.momz = 0; }                 // 撞顶
 }
 
-void P_MobjThinker(const World& w, mobj_t& mo) {
+void P_MobjThinker(World& w, mobj_t& mo) {
     if (mo.momx || mo.momy) P_XYMovement(w, mo);
     if (mo.momz || !(mo.flags & MF_NOGRAVITY)) P_ZMovement(w, mo);
     // 状态推进（P5a spawnstate 均 tics=-1，本分支不触发；为 P5b 及死亡状态留接口）
@@ -76,17 +76,30 @@ mobj_t* P_SpawnMobj(World& w, fixed_t x, fixed_t y, fixed_t z, mobjtype_t type) 
 }
 
 void P_SetMobjState(mobj_t& m, statenum_t sn) {
-    if (sn == S_NULL) { m.state = &states[S_NULL]; m.tics = -1; return; }
+    if (sn == S_NULL) {   // removed/inactive: clear the render cache so nothing is drawn
+        m.state = &states[S_NULL];
+        m.tics = -1;
+        m.sprname[0] = '\0';
+        m.frame = 'A';
+        m.fullbright = false;
+        return;
+    }
     m.state = &states[sn];
     m.tics = m.state->tics;
     // refresh render cache (faithful: copy state->sprite/frame into mobj)
     if (m.state->sprite != SPR_NONE)
         std::memcpy(m.sprname, sprnames[m.state->sprite], 5);
+    else
+        m.sprname[0] = '\0';
     m.frame = static_cast<char>('A' + (m.state->frame & FF_FRAMEMASK));
     m.fullbright = (m.state->frame & FF_FULLBRIGHT) != 0;
 }
 
 void P_RemoveMobj(World& w, mobj_t& m) {
+    // Vanilla unlinks mobjs via P_RemoveThinker after the thinker pass. During P_RunThinkers an
+    // immediate erase would invalidate the iteration (and any pointer another thinker holds), so
+    // defer it; outside a pass (e.g. level teardown) erase immediately.
+    if (w.thinkering) { m.removePending = true; return; }
     for (auto it = w.mobjs.begin(); it != w.mobjs.end(); ++it)
         if (&*it == &m) { w.mobjs.erase(it); return; }
 }

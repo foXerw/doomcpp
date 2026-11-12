@@ -6,6 +6,7 @@
 #include "info.h"
 #include "core/m_fixed.h"    // FixedMul
 #include "core/m_tables.h"   // finecosine/finesine
+#include <iterator>          // std::next
 
 void P_SetupLevel(World& w, const MapData& m) {
     w.mobjs.clear();
@@ -45,6 +46,7 @@ void P_BuildThingsBySubsec(World& w) {
     if (!w.map) return;
     w.thingsBySubsec.assign(w.map->subsectors.size(), {});
     for (mobj_t& mo : w.mobjs) {
+        if (mo.removePending) continue;                // unlinked after this thinker pass
         if (&mo == w.player.mo) continue;              // 第一人称：不画玩家自身
         if (mo.flags & MF_NOSECTOR) continue;
         mo.subsector = R_PointInSubsector(*w.map, mo.x, mo.y);
@@ -58,7 +60,14 @@ void P_BuildThingsBySubsec(World& w) {
 
 void P_RunThinkers(World& w) {
     ++w.tic;
-    for (mobj_t& mo : w.mobjs) P_MobjThinker(w, mo);
+    w.thinkering = true;
+    for (auto it = w.mobjs.begin(); it != w.mobjs.end(); ) {
+        auto next = std::next(it);              // removal of *it (deferred) keeps `next` valid
+        if (!it->removePending) P_MobjThinker(w, *it);
+        it = next;
+    }
+    w.thinkering = false;
+    w.mobjs.remove_if([](const mobj_t& m) { return m.removePending; });
 }
 
 mobj_t* P_TossBarrel(World& w) {

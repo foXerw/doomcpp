@@ -102,6 +102,11 @@ const mobjinfo_t mobjinfo[] = {
     /* MT_D2049 */ {2049,S_D2049,1000,16<<FRACBITS,56<<FRACBITS,0,100, MF_SPECIAL|MF_NOBLOCKMAP|MF_NOGRAVITY|MF_DROPOFF, S_NULL,S_NULL,S_NULL,S_NULL,S_NULL,S_NULL, 0,0,8 },
 };
 
+// Table/enum consistency: a missing or extra row would silently shift every index.
+static_assert(sizeof(sprnames) / sizeof(sprnames[0]) == NUMSPRITES, "sprnames out of sync");
+static_assert(sizeof(states)   / sizeof(states[0])   == NUMSTATES,  "states out of sync");
+static_assert(sizeof(mobjinfo) / sizeof(mobjinfo[0]) == NUMMOBJTYPES, "mobjinfo out of sync");
+
 int mobjtypeForDoomednum(int dn) {
     for (int i = 0; i < NUMMOBJTYPES; ++i)
         if (mobjinfo[i].doomednum == dn) return i;

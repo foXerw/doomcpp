@@ -16,6 +16,7 @@ struct mobj_t {
     const mobjinfo_t* info = nullptr;
     const state_t*   state = nullptr;
     int     subsector = -1;
+    bool    removePending = false;          // vanilla P_RemoveMobj: unlink after the thinker pass
     // —— 渲染缓存（渲染器只读）——
     char    sprname[5] = {0};
     char    frame = 'A';                    // 'A'-based（SpriteCache.resolve 做 frame-'A'）
@@ -24,5 +25,5 @@ struct mobj_t {
 };
 
 struct World;   // fwd（p_tick.h 完整定义；避免 p_mobj.h -> p_tick.h 循环 include）
-// Task 6：per-tic mobj thinker（动量/摩擦/重力/状态推进）。定义在 p_mobj.cpp。
-void P_MobjThinker(const World& w, mobj_t& mo);
+// per-tic mobj thinker（动量/摩擦/重力/状态推进；P5b 可在其中 spawn/remove）。
+void P_MobjThinker(World& w, mobj_t& mo);

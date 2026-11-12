@@ -20,6 +20,7 @@ struct World {
     std::list<mobj_t>           mobjs;
     player_t                    player;
     std::uint32_t               tic = 0;
+    bool                        thinkering = false;   // P_RemoveMobj defers unlinking during a pass
     std::vector<std::vector<const mobj_t*>> thingsBySubsec;
 };
 
