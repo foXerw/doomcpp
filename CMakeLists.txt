@@ -58,3 +58,11 @@ list(APPEND CMAKE_MODULE_PATH ${doctest_SOURCE_DIR}/scripts/cmake)
 
 enable_testing()
 add_subdirectory(tests)
+
+# Runtime smoke: exercises the real init/movement/toss/render path (catches missing
+# main-path init calls that unit tests self-initialize away). Only registered when the
+# Freedoom IWAD is present, since assets/ is gitignored.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    add_test(NAME runtime_smoke
+             COMMAND $<TARGET_FILE:doomcpp> --smoketest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+endif()

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 #include "core/i_system.h"
@@ -142,6 +143,143 @@ int main(int argc, char** argv) {
                           << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
                 return 0;
             }
+            if (std::string(argv[i]) == "--dumptex" && i + 3 < argc) {
+                // Debug: dump a decoded wall texture to BMP (check alpha/transparency layout).
+                WadFile wad(argv[i + 1]);
+                TextureLookup tex(wad);
+                const Texture* t = tex.wall(argv[i + 2]);
+                if (!t) { I_Printf("no such texture"); return 1; }
+                std::vector<std::uint32_t> px = t->rgba;
+                for (auto& p : px) if (!(p & 0xFFu)) p = 0xFF00FFFFu;   // show holes as magenta
+                writeBMP(argv[i + 3], px.data(), t->width, t->height);
+                std::cout << "wrote " << argv[i + 3] << " (" << t->name << " "
+                          << t->width << "x" << t->height << ")\n";
+                return 0;
+            }
+            if (std::string(argv[i]) == "--gapscan" && i + 1 < argc) {
+                // Debug diagnostic: render one world-only frame (no sprites) over a
+                // magenta sentinel and count pixels no wall/plane covered. A non-zero
+                // count is a real renderer coverage hole (black seams / HOM), not a
+                // black texel -- legit black pixels never equal the sentinel.
+                // Usage: --gapscan <wad> [angleDeg] [x y]   (same pose args as --dumpframe)
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
+                fixed_t px, py; angle_t ang;
+                if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
+                if (i + 2 < argc) ang = degreesToBam(std::atoi(argv[i + 2]));
+                if (i + 4 < argc) {
+                    px = static_cast<fixed_t>(std::atof(argv[i + 3]) * (1 << FRACBITS));
+                    py = static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS));
+                }
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;   // magenta
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                fixed_t eyeZ0 = (sec0 >= 0 ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS)
+                                           : 0) + VIEWHEIGHT;
+                auto renderGap = [&](bool forceOpaque) {
+                    R_SetForceOpaqueForDiagnostics(forceOpaque);
+                    R_RenderView(fb.data(), FW, FH, map, tex,
+                                 static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                                 bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
+                                 nullptr, nullptr, SENTINEL);
+                    R_SetForceOpaqueForDiagnostics(false);
+                    std::vector<int> rowGaps(FH, 0);
+                    int total = 0, minCol = FW, maxCol = -1, minRow = FH, maxRow = -1;
+                    for (int y = 0; y < FH; ++y)
+                        for (int x = 0; x < FW; ++x)
+                            if (fb[static_cast<size_t>(y) * FW + x] == SENTINEL) {
+                                ++total; ++rowGaps[y];
+                                minCol = std::min(minCol, x); maxCol = std::max(maxCol, x);
+                                minRow = std::min(minRow, y); maxRow = std::max(maxRow, y);
+                            }
+                    return std::make_tuple(total, rowGaps, minCol, maxCol, minRow, maxRow);
+                };
+                // Pass 1: raw sentinel count (geometry holes + transparent/masked-texel holes).
+                // Pass 2: transparent texels painted opaque -> counts only TRUE geometry holes.
+                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                auto [total, rowGaps, minCol, maxCol, minRow, maxRow] = renderGap(false);
+                std::cout << "gapscan: raw=" << total << " geometry=" << geom;
+                if (geom) std::cout << " geombbox=x[" << gMinCol << "," << gMaxCol
+                                    << "] y[" << gMinRow << "," << gMaxRow << "]";
+                std::cout << "\n";
+                if (total) std::cout << "  bbox=x[" << minCol << "," << maxCol << "] y[" << minRow << "," << maxRow << "]\n";
+                std::vector<int> rows(FH);
+                for (int y = 0; y < FH; ++y) rows[y] = y;
+                std::sort(rows.begin(), rows.end(), [&](int a, int b){ return rowGaps[a] > rowGaps[b]; });
+                for (int k = 0; k < 10 && rowGaps[rows[k]] > 0; ++k)
+                    std::cout << "  row " << rows[k] << ": " << rowGaps[rows[k]] << "\n";
+                if (i + 5 < argc) writeBMP(argv[i + 5], fb.data(), FW, FH);   // force-opaque frame
+                return 0;
+            }
+            if (std::string(argv[i]) == "--smoketest" && i + 1 < argc) {
+                // Runtime smoke: exercises the REAL init/movement/toss/render path headlessly.
+                // Unit tests self-init and --dumpframe renders a static frame, so neither can
+                // catch a missing main-path init call (the P3.5a R_InitTables regression: dead
+                // WASD while all tests and dumpframes were green). Exit code 1 on any failure.
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                World w; w.map = &map; w.bm = &map.blockmap;
+                P_SetupLevel(w, map);
+                int failures = 0;
+                auto check = [&](bool ok, const char* what) {
+                    std::cout << (ok ? "PASS: " : "FAIL: ") << what << "\n";
+                    if (!ok) ++failures;
+                };
+                check(w.player.mo != nullptr, "P_SetupLevel spawns the player");
+                if (!w.player.mo) { std::cout << "SMOKETEST FAILED\n"; return 1; }
+
+                // Toss first (from the open start pose), then let physics run: arc up, fall.
+                mobj_t* b = P_TossBarrel(w);
+                check(b != nullptr, "G-toss spawns a barrel");
+                if (b) {
+                    fixed_t z0 = b->z, maxz = z0;
+                    bool airborne = false;
+                    for (int t = 0; t < 45; ++t) {
+                        P_RunThinkers(w);
+                        maxz = std::max(maxz, b->z);
+                        if (b->z > b->floorz) airborne = true;
+                    }
+                    check(maxz > z0, "tossed barrel arcs upward (upward momentum applied)");
+                    check(airborne, "tossed barrel leaves the floor");
+                    check(b->momz <= 0, "gravity reverses the barrel's vertical momentum");
+                }
+
+                // Movement path: R_InitTables must have been called on this path or this is dead.
+                fixed_t x0 = w.player.mo->x, y0 = w.player.mo->y;
+                for (int t = 0; t < 20; ++t) {
+                    P_MovePlayer(map, map.blockmap, w.player, 5 << FRACBITS, 0, 0);
+                    P_RunThinkers(w);
+                }
+                check(w.player.mo->x != x0 || w.player.mo->y != y0,
+                      "forward movement changes the player position (WASD path live)");
+
+                angle_t a0 = w.player.mo->angle;
+                for (int t = 0; t < 10; ++t)
+                    P_MovePlayer(map, map.blockmap, w.player, 0, 0, degreesToBam(4));
+                check(w.player.mo->angle != a0, "turning changes the player angle");
+
+                // Render path: a static frame must contain actual geometry, not just clear color.
+                P_BuildThingsBySubsec(w);
+                std::vector<std::uint32_t> fb(static_cast<size_t>(320) * 200, 0);
+                R_RenderView(fb.data(), 320, 200, map, tex,
+                             static_cast<float>(w.player.mo->x >> FRACBITS),
+                             static_cast<float>(w.player.mo->y >> FRACBITS),
+                             bamToRendererRad(w.player.mo->angle),
+                             static_cast<float>(w.player.viewz >> FRACBITS),
+                             w.tic, &sprites, &w.thingsBySubsec);
+                int nonblack = 0;
+                for (std::uint32_t p : fb) if (p != 0x000000FFu) ++nonblack;
+                check(nonblack > 320 * 200 / 4, "renderer fills the frame with geometry");
+
+                std::cout << (failures ? "SMOKETEST FAILED (" : "SMOKETEST PASSED (")
+                          << failures << " failures)\n";
+                return failures ? 1 : 0;
+            }
             if (std::string(argv[i]) == "--tickdump" && i + 3 < argc) {
                 // P5a physics visualization (headless): load E1M1, spawn a barrel
                 // with forward+up momentum at a fixed (or CLI-overridden) spot,
@@ -227,19 +365,7 @@ int main(int argc, char** argv) {
             // frame, OUTSIDE the tic batch so a held key never spawns 4×/frame).
             if (in.spawn) {
                 in.spawn = false;
-                mobj_t* mo = w.player.mo;
-                int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
-                fixed_t fc = finecosine[fi], fs = finesine[fi];
-                fixed_t dist = 48 << FRACBITS;
-                mobj_t* b = P_SpawnMobj(w,
-                                        mo->x + FixedMul(fc, dist),
-                                        mo->y + FixedMul(fs, dist),
-                                        mo->floorz, MT_BARREL);
-                b->floorz = mo->floorz;
-                b->ceilingz = mo->ceilingz;
-                b->momx = FixedMul(fc, 10 << FRACBITS);
-                b->momy = FixedMul(fs, 10 << FRACBITS);
-                b->momz = 9 << FRACBITS;   // upward toss
+                P_TossBarrel(w);
             }
             uint32_t now = SDL_GetTicks();
             acc += (now - prev); prev = now;

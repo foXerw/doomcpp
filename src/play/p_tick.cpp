@@ -4,6 +4,8 @@
 #include "p_maputl.h"
 #include "p_map.h"      // VIEWHEIGHT
 #include "info.h"
+#include "core/m_fixed.h"    // FixedMul
+#include "core/m_tables.h"   // finecosine/finesine
 
 void P_SetupLevel(World& w, const MapData& m) {
     w.mobjs.clear();
@@ -57,4 +59,20 @@ void P_BuildThingsBySubsec(World& w) {
 void P_RunThinkers(World& w) {
     ++w.tic;
     for (mobj_t& mo : w.mobjs) P_MobjThinker(w, mo);
+}
+
+mobj_t* P_TossBarrel(World& w) {
+    mobj_t* mo = w.player.mo;
+    if (!mo) return nullptr;
+    int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+    fixed_t fc = finecosine[fi], fs = finesine[fi];
+    fixed_t dist = 48 << FRACBITS;
+    mobj_t* b = P_SpawnMobj(w, mo->x + FixedMul(fc, dist), mo->y + FixedMul(fs, dist),
+                            mo->floorz, MT_BARREL);
+    b->floorz = mo->floorz;
+    b->ceilingz = mo->ceilingz;
+    b->momx = FixedMul(fc, 10 << FRACBITS);
+    b->momy = FixedMul(fs, 10 << FRACBITS);
+    b->momz = 9 << FRACBITS;   // upward toss
+    return b;
 }

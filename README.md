@@ -19,6 +19,7 @@ matching the original renderer's algorithms.
 - [x] P3.5 碰撞定点 + 渲染器复刻(float) (angle_t/BAM + finesine/finecosine trig tables, node_t→fixed_t, p_map/p_maputl fixed-point collision + movement; renderer stays float as doomcpp's own reimplementation; FixedSqrt; pit HOM fix)
 - [x] P4 精灵 (r_things: SpriteCache S_START/S_END decode + install/resolve/mirror, SpriteDef doomednum→sprite table, render-only mobj_t, R_ProjectSprite float projection + atan2 8-way rotation, R_DrawVisSprite per-column masked draw + distance shade + flip, per-column wallDepth wall occlusion, drawn back-to-front after visplanes)
 - [x] P5a 思考者/mobj 系统（活对象 + 物理 + 抛桶里程碑）
+- [x] P3.5d 渲染覆盖修复 (upper-wall 条件反转、markCeil/markFloor 单向判断、墙面 V 坐标上下翻转、平面带取整缝隙；`--gapscan`/`--dumptex` 诊断工具)
 
 ## Build (Windows)
 
@@ -41,6 +42,21 @@ Run unit tests:
 
 ```bash
 ctest --test-dir build --build-config Release --output-on-failure
+```
+
+Runtime smoke test (real init → movement → turn → toss physics → render; exit code 1 on failure;
+also registered as the `runtime_smoke` CTest when `assets/freedoom1.wad` exists):
+
+```bash
+./build/Release/doomcpp.exe --smoketest assets/freedoom1.wad
+```
+
+Renderer coverage diagnostic (renders a magenta sentinel frame; `geometry=` must be 0 — any
+remaining `raw=` pixels are masked/transparent texture texels, which are legitimately black):
+
+```bash
+./build/Release/doomcpp.exe --gapscan assets/freedoom1.wad [angleDeg] [x y]
+./build/Release/doomcpp.exe --dumptex assets/freedoom1.wad AQTRIM05 out.bmp   # alpha layout
 ```
 
 ## Assets
