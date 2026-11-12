@@ -46,3 +46,6 @@ vcpkg_installed/
 
 # Debug frame dumps (--dumpframe / investigation)
 dbg/
+
+# CTest artifacts
+Testing/

@@ -15,12 +15,14 @@
 #include "play/info.h"
 #include "play/p_setup.h"
 #include "play/p_tick.h"
+#include "play/p_pspr.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
 #include "render/r_data.h"
 #include "render/r_draw.h"
 #include "render/r_things.h"
+#include "ui/st_stuff.h"
 #include "wad/wadfile.h"
 
 // P3.5a BRIDGE (delete in P3.5b): the renderer still takes the P2a float angle
@@ -31,6 +33,17 @@ static float bamToRendererRad(angle_t a) {
     constexpr double PI = 3.141592653589793;
     double aRad = static_cast<double>(a) * (2.0 * PI / 4294967296.0);
     return static_cast<float>(PI / 2.0 - aRad);
+}
+
+// Overlay the player's first-person weapon/flash sprites after the 3D view.
+static void drawPlayerSprites(const World& w, const SpriteCache& sprites,
+                              std::uint32_t* fb, int fw, int fh) {
+    for (int i = 0; i < 2; ++i) {
+        const pspdef_t& ps = w.player.psprites[i];
+        if (!ps.state || ps.state->sprite == SPR_NONE) continue;
+        char frame = static_cast<char>('A' + (ps.state->frame & FF_FRAMEMASK));
+        R_DrawPSprite(fb, fw, fh, sprnames[ps.state->sprite], frame, ps.sx, ps.sy, sprites);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -130,10 +143,14 @@ int main(int argc, char** argv) {
                 int sec0 = sectorOf(map, ss0);
                 fixed_t eyeZ0 = (sec0 >= 0 ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS)
                                            : 0) + VIEWHEIGHT;
-                R_RenderView(fb.data(), FW, FH, map, tex,
+                constexpr int VIEW_H = FH - 32;   // vanilla 320x168 view + 32-row status bar
+                R_RenderView(fb.data(), FW, VIEW_H, map, tex,
                              static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                              bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
                              &sprites, &w.thingsBySubsec);
+                drawPlayerSprites(w, sprites, fb.data(), FW, VIEW_H);
+                StatusBar stbar(wad);
+                stbar.draw(fb.data(), FW, FH, w.player);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
                 // Rendered mobs exclude the player (camera): P_SetupLevel spawns it into w.mobjs
                 // as w.player.mo, but P_BuildThingsBySubsec skips it from the render bins. The
@@ -141,6 +158,20 @@ int main(int argc, char** argv) {
                 // player preserves the P4 N=226 regression sentinel.
                 std::cout << "wrote " << argv[i + 2] << " (mobs="
                           << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
+                return 0;
+            }
+            if (std::string(argv[i]) == "--dumppatch" && i + 3 < argc) {
+                // Debug: dump an arbitrary patch lump (HUD/status-bar graphics) to BMP.
+                WadFile wad(argv[i + 1]);
+                if (wad.checkNumForName(argv[i + 2]) < 0) { I_Printf("no such lump"); return 1; }
+                auto raw = wad.readLumpByName(argv[i + 2]);
+                auto pal = loadPalette(wad);
+                Patch p = decodePatch(raw.data(), raw.size(), pal.data());
+                std::vector<std::uint32_t> px = p.rgba;
+                for (auto& c : px) if (!(c & 0xFFu)) c = 0xFF00FFFFu;
+                writeBMP(argv[i + 3], px.data(), p.width, p.height);
+                std::cout << "wrote " << argv[i + 3] << " (" << argv[i + 2] << " "
+                          << p.width << "x" << p.height << ")\n";
                 return 0;
             }
             if (std::string(argv[i]) == "--dumptex" && i + 3 < argc) {
@@ -263,6 +294,25 @@ int main(int argc, char** argv) {
                     P_MovePlayer(map, map.blockmap, w.player, 0, 0, degreesToBam(4));
                 check(w.player.mo->angle != a0, "turning changes the player angle");
 
+                // Weapon path: put a barrel in front and hold fire; the pistol must damage it.
+                {
+                    mobj_t* mo = w.player.mo;
+                    int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                    fixed_t dist = 96 << FRACBITS;
+                    mobj_t* target = P_SpawnMobj(
+                        w, mo->x + FixedMul(finecosine[fi], dist),
+                        mo->y + FixedMul(finesine[fi], dist), mo->z, MT_BARREL);
+                    int hp0 = target->health;
+                    w.player.ammo[AM_CLIP] = 50;
+                    w.player.readyweapon = WP_PISTOL;
+                    P_SetPsprite(w, w.player, 0, S_PISTOL);
+                    for (int t = 0; t < 40; ++t) {
+                        P_PlayerThink(w, true, -1);
+                        P_RunThinkers(w);
+                    }
+                    check(target->health < hp0, "pistol fire damages a barrel in front");
+                }
+
                 // Render path: a static frame must contain actual geometry, not just clear color.
                 P_BuildThingsBySubsec(w);
                 std::vector<std::uint32_t> fb(static_cast<size_t>(320) * 200, 0);
@@ -340,11 +390,12 @@ int main(int argc, char** argv) {
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P5a thinker/mobj)  WASD move, arrows turn, G toss barrel, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P5b combat)  WASD move, arrows turn, Ctrl fire, 1-8 weapons, G toss, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
         SpriteCache sprites(wad);
+        StatusBar stbar(wad);
         World w; w.map = &map; w.bm = &map.blockmap;
         P_SetupLevel(w, map);   // spawns w.player.mo (x/y/angle/floorz/subsector) + sets w.player.viewz
 
@@ -373,18 +424,24 @@ int main(int argc, char** argv) {
                 int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
                 int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
+                P_PlayerThink(w, in.fire, in.weaponSwitch);   // P5b weapons/psprites
+                in.weaponSwitch = -1;                         // edge-triggered slot
                 P_MovePlayer(map, map.blockmap, w.player,
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                P_TouchSpecialThings(w, *w.player.mo);   // P5b pickups
                 P_RunThinkers(w);
                 ++ticCount;
             }
             P_BuildThingsBySubsec(w);
-            R_RenderView(fb.data(), FB_W, FB_H, map, tex,
+            constexpr int VIEW_H = FB_H - 32;   // vanilla 320x168 view + status bar
+            R_RenderView(fb.data(), FB_W, VIEW_H, map, tex,
                          static_cast<float>(w.player.mo->x >> FRACBITS),
                          static_cast<float>(w.player.mo->y >> FRACBITS),
                          bamToRendererRad(w.player.mo->angle),
                          static_cast<float>(w.player.viewz >> FRACBITS),
                          ticCount, &sprites, &w.thingsBySubsec);
+            drawPlayerSprites(w, sprites, fb.data(), FB_W, VIEW_H);
+            stbar.draw(fb.data(), FB_W, FB_H, w.player);
             i_video::present(fb.data());
         }
 

@@ -1,8 +1,12 @@
 #include "p_map.h"
+#include "p_inter.h"
 #include "core/m_fixed.h"
 #include "core/m_tables.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <iterator>
+#include <limits>
 
 // Vanilla m_fixed.c::P_AproxDistance (sqrt-free): |dx|+|dy| - min/2.
 static fixed_t P_AproxDistance(fixed_t dx, fixed_t dy) {
@@ -58,7 +62,7 @@ PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, const mobj_t& mo,
 bool P_TryMove(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t nx, fixed_t ny) {
     PosCheck pc = P_CheckPosition(m, bm, mo, nx, ny);
     if (!pc.ok) return false;
-    fixed_t h = mo.info ? mo.info->height : PLAYERHEIGHT;
+    fixed_t h = mo.height ? mo.height : (mo.info ? mo.info->height : PLAYERHEIGHT);
     if (pc.ceilingz - pc.floorz < h) return false;   // doesn't fit vertically
     if (pc.ceilingz - mo.floorz  < h) return false;   // not enough headroom
     if (pc.floorz   - mo.floorz  > STEP_LIMIT) return false;   // step up too high
@@ -77,6 +81,328 @@ bool P_TrySlide(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t dx, fi
     return false;
 }
 
+void P_BlockThingsIterator(World& w, fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2,
+                           const std::function<bool(mobj_t&)>& fn) {
+    // Lookahead: the callback may remove the current mobj (damage with no death state);
+    // `next` stays valid because std::list only invalidates the erased node.
+    for (auto it = w.mobjs.begin(); it != w.mobjs.end(); ) {
+        auto next = std::next(it);
+        if (!it->removePending) {
+            mobj_t& mo = *it;
+            fixed_t r = mo.info ? mo.info->radius : 0;
+            if (!(mo.x + r <= x1 || mo.x - r >= x2 || mo.y + r <= y1 || mo.y - r >= y2)) {
+                if (fn(mo)) return;
+            }
+        }
+        it = next;
+    }
+}
+
+namespace {
+// 2D cross product of int64-shifted map-unit vectors (avoids fixed overflow).
+double cross2(double ax, double ay, double bx, double by) { return ax * by - ay * bx; }
+
+// Clamp a freshly spawned effect's z into its sector and copy floor/ceiling heights.
+void clampSpawnToSector(World& w, mobj_t& mo) {
+    if (!w.map) return;
+    int sec = sectorOf(*w.map, R_PointInSubsector(*w.map, mo.x, mo.y));
+    if (sec < 0) return;
+    mo.floorz   = static_cast<fixed_t>(w.map->sectors[sec].floorheight)   << FRACBITS;
+    mo.ceilingz = static_cast<fixed_t>(w.map->sectors[sec].ceilingheight) << FRACBITS;
+    fixed_t maxz = mo.ceilingz - (mo.height ? mo.height : (mo.info ? mo.info->height : 0));
+    if (mo.z < mo.floorz) mo.z = mo.floorz;
+    if (mo.z > maxz)      mo.z = maxz;
+}
+}  // namespace
+
+mobj_t* P_SpawnPuff(World& w, fixed_t x, fixed_t y, fixed_t z) {
+    mobj_t* th = P_SpawnMobj(w, x, y, z, MT_PUFF);
+    clampSpawnToSector(w, *th);
+    return th;
+}
+
+mobj_t* P_SpawnBlood(World& w, fixed_t x, fixed_t y, fixed_t z, int damage) {
+    mobj_t* th = P_SpawnMobj(w, x, y, z, MT_BLOOD);
+    clampSpawnToSector(w, *th);
+    th->momz = 2 * FRACUNIT;      // small upward spurt; gravity pulls it down
+    (void)damage;
+    return th;
+}
+
+mobj_t* P_LineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t z,
+                     angle_t angle, fixed_t slope, int damage) {
+    if (!w.map) return nullptr;
+    const int fi = static_cast<int>((angle >> ANGLETOFINESHIFT) & FINEMASK);
+    const double ox = static_cast<double>(x) / FRACUNIT;
+    const double oy = static_cast<double>(y) / FRACUNIT;
+    const double oz = static_cast<double>(z) / FRACUNIT;
+    const double dx = static_cast<double>(finecosine[fi]) / FRACUNIT;
+    const double dy = static_cast<double>(finesine[fi]) / FRACUNIT;
+    const double slopeU = static_cast<double>(slope) / FRACUNIT;
+    const double rangeU = static_cast<double>(MISSILERANGE) / FRACUNIT;
+
+    // --- nearest wall that stops the shot (two-sided openings let it pass) ---
+    double wallT = std::numeric_limits<double>::infinity();
+    for (const line_t& L : w.map->lines) {
+        if (L.v1 < 0 || L.v1 >= static_cast<int>(w.map->vertices.size())) continue;
+        if (L.v2 < 0 || L.v2 >= static_cast<int>(w.map->vertices.size())) continue;
+        const double ax = static_cast<double>(w.map->vertices[L.v1].x) / FRACUNIT;
+        const double ay = static_cast<double>(w.map->vertices[L.v1].y) / FRACUNIT;
+        const double bx = static_cast<double>(w.map->vertices[L.v2].x) / FRACUNIT;
+        const double by = static_cast<double>(w.map->vertices[L.v2].y) / FRACUNIT;
+        const double sx = bx - ax, sy = by - ay;
+        const double denom = cross2(dx, dy, sx, sy);
+        if (std::fabs(denom) < 1e-9) continue;              // parallel
+        const double t = cross2(ax - ox, ay - oy, sx, sy) / denom;
+        const double u = cross2(ax - ox, ay - oy, dx, dy) / denom;
+        if (t <= 0.0 || t > rangeU || t >= wallT) continue;
+        if (u < 0.0 || u > 1.0) continue;
+        const bool twoSided = L.sidenum[1] >= 0;
+        if (twoSided) {
+            Opening op = P_LineOpening(*w.map, L);
+            const double top = static_cast<double>(op.top) / FRACUNIT;
+            const double bot = static_cast<double>(op.bottom) / FRACUNIT;
+            const double zHit = oz + slopeU * t;
+            if (zHit >= bot && zHit <= top) continue;       // passes through the opening
+        }
+        wallT = t;
+    }
+
+    // --- nearest shootable mobj along the ray ---
+    mobj_t* hit = nullptr;
+    double thingT = std::numeric_limits<double>::infinity();
+    {
+        const double ex = ox + dx * rangeU, ey = oy + dy * rangeU;
+        const double bx1 = std::min(ox, ex) - 64, bx2 = std::max(ox, ex) + 64;
+        const double by1 = std::min(oy, ey) - 64, by2 = std::max(oy, ey) + 64;
+        P_BlockThingsIterator(
+            w, static_cast<fixed_t>(bx1 * FRACUNIT), static_cast<fixed_t>(by1 * FRACUNIT),
+            static_cast<fixed_t>(bx2 * FRACUNIT), static_cast<fixed_t>(by2 * FRACUNIT),
+            [&](mobj_t& mo) {
+                if (&mo == source) return false;
+                if (!(mo.flags & MF_SHOOTABLE) || mo.health <= 0) return false;
+                const double cx = static_cast<double>(mo.x) / FRACUNIT;
+                const double cy = static_cast<double>(mo.y) / FRACUNIT;
+                const double rx = cx - ox, ry = cy - oy;
+                const double tca = rx * dx + ry * dy;
+                if (tca < 0.0) return false;
+                const double r = static_cast<double>(mo.info ? mo.info->radius : 0) / FRACUNIT;
+                const double perp2 = rx * rx + ry * ry - tca * tca;
+                if (perp2 > r * r) return false;
+                double tenter = tca - std::sqrt(std::max(0.0, r * r - perp2));
+                if (tenter < 0.0) tenter = 0.0;
+                if (tenter > rangeU || tenter >= thingT) return false;
+                const double zHit = oz + slopeU * tenter;
+                const double mz  = static_cast<double>(mo.z) / FRACUNIT;
+                const double mh  = static_cast<double>(mo.height ? mo.height : (mo.info ? mo.info->height : 0)) / FRACUNIT;
+                if (zHit < mz || zHit > mz + mh) return false;
+                hit = &mo;
+                thingT = tenter;
+                return false;
+            });
+    }
+
+    if (hit && thingT < wallT) {
+        const double zHit = oz + slopeU * thingT;
+        const fixed_t px = static_cast<fixed_t>((ox + dx * thingT) * FRACUNIT);
+        const fixed_t py = static_cast<fixed_t>((oy + dy * thingT) * FRACUNIT);
+        const fixed_t pz = static_cast<fixed_t>(zHit * FRACUNIT);
+        if (!(hit->flags & MF_NOBLOOD)) P_SpawnBlood(w, px, py, pz, damage);
+        else                            P_SpawnPuff(w, px, py, pz);
+        P_DamageMobj(w, *hit, source, damage);
+        return hit;
+    }
+
+    // Wall/range impact: puff at the impact point (clamped into the sector).
+    const double t = (wallT < rangeU) ? wallT : rangeU;
+    const double zHit = oz + slopeU * t;
+    P_SpawnPuff(w, static_cast<fixed_t>((ox + dx * t) * FRACUNIT),
+                static_cast<fixed_t>((oy + dy * t) * FRACUNIT),
+                static_cast<fixed_t>(zHit * FRACUNIT));
+    return nullptr;
+}
+
+mobj_t* P_AimLineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t z,
+                        angle_t angle, fixed_t distance, fixed_t& slopeOut) {
+    slopeOut = 0;
+    if (!w.map) return nullptr;
+    const int fi = static_cast<int>((angle >> ANGLETOFINESHIFT) & FINEMASK);
+    const double ox = static_cast<double>(x) / FRACUNIT;
+    const double oy = static_cast<double>(y) / FRACUNIT;
+    const double oz = static_cast<double>(z) / FRACUNIT;
+    const double dx = static_cast<double>(finecosine[fi]) / FRACUNIT;
+    const double dy = static_cast<double>(finesine[fi]) / FRACUNIT;
+    const double rangeU = static_cast<double>(distance) / FRACUNIT;
+
+    mobj_t* best = nullptr;
+    double bestT = std::numeric_limits<double>::infinity();
+    const double ex = ox + dx * rangeU, ey = oy + dy * rangeU;
+    P_BlockThingsIterator(
+        w, static_cast<fixed_t>((std::min(ox, ex) - 64) * FRACUNIT),
+           static_cast<fixed_t>((std::min(oy, ey) - 64) * FRACUNIT),
+           static_cast<fixed_t>((std::max(ox, ex) + 64) * FRACUNIT),
+           static_cast<fixed_t>((std::max(oy, ey) + 64) * FRACUNIT),
+        [&](mobj_t& mo) {
+            if (&mo == source) return false;
+            if (!(mo.flags & MF_SHOOTABLE) || mo.health <= 0) return false;
+            const double cx = static_cast<double>(mo.x) / FRACUNIT;
+            const double cy = static_cast<double>(mo.y) / FRACUNIT;
+            const double rx = cx - ox, ry = cy - oy;
+            const double tca = rx * dx + ry * dy;
+            if (tca < 0.0 || tca > rangeU) return false;
+            const double r = static_cast<double>(mo.info ? mo.info->radius : 0) / FRACUNIT;
+            const double perp2 = rx * rx + ry * ry - tca * tca;
+            if (perp2 > r * r) return false;
+            const double mz = static_cast<double>(mo.z) / FRACUNIT;
+            const double mh = static_cast<double>(mo.height ? mo.height : (mo.info ? mo.info->height : 0)) / FRACUNIT;
+            if (oz < mz || oz > mz + mh) return false;      // horizontal aim must cross the box
+            double tenter = tca - std::sqrt(std::max(0.0, r * r - perp2));
+            if (tenter < 0.0) tenter = 0.0;
+            if (tenter < bestT) { bestT = tenter; best = &mo; }
+            return false;
+        });
+    if (best) {
+        const double targetZ = (static_cast<double>(best->z) +
+                                static_cast<double>(best->height ? best->height : best->info->height) / 2) / FRACUNIT;
+        slopeOut = static_cast<fixed_t>((targetZ - oz) / (bestT > 1e-6 ? bestT : 1.0) * FRACUNIT);
+    }
+    return best;
+}
+
+namespace {
+// Applies one special thing to the player. Returns true when it was consumed.
+bool touchSpecialThing(World& w, mobj_t& thing) {
+    player_t& p = w.player;
+    const int dn = thing.info ? thing.info->doomednum : -1;
+    auto addAmmo = [&](ammotype_t at, int amount) {
+        int& a = p.ammo[at];
+        if (a >= p.maxammo[at]) return false;
+        a = std::min(p.maxammo[at], a + amount);
+        return true;
+    };
+    auto giveWeapon = [&](weapontype_t wp) {
+        if (p.weapons & (1u << wp)) return false;
+        p.weapons |= (1u << wp);
+        return true;
+    };
+    switch (dn) {
+    case 2007: if (addAmmo(AM_CLIP, 10))  return true; break;    // clip
+    case 2048: if (addAmmo(AM_CLIP, 50))  return true; break;    // box of bullets
+    case 2008: if (addAmmo(AM_SHELL, 4))  return true; break;    // shells
+    case 2049: if (addAmmo(AM_SHELL, 20)) return true; break;    // box of shells
+    case 2010: if (addAmmo(AM_MISL, 1))   return true; break;    // rocket
+    case 2046: if (addAmmo(AM_MISL, 5))   return true; break;    // box of rockets
+    case 2011:                                                    // stimpack
+        if (p.health < 100) { p.health = std::min(100, p.health + 10); return true; }
+        break;
+    case 2012:                                                    // medikit
+        if (p.health < 100) { p.health = std::min(100, p.health + 25); return true; }
+        break;
+    case 2013:                                                    // soul sphere
+        if (p.health < 200) { p.health = std::min(200, p.health + 100); return true; }
+        break;
+    case 2014:                                                    // health bonus
+        if (p.health < 200) { p.health = std::min(200, p.health + 1); return true; }
+        break;
+    case 2015:                                                    // armor bonus
+        if (p.armorpoints[0] < 200) {
+            p.armorpoints[0] = std::min(200, p.armorpoints[0] + 1);
+            if (p.armortype == 0) p.armortype = 1;
+            return true;
+        }
+        break;
+    case 2018:                                                    // green armor
+        if (p.armorpoints[0] < 100) { p.armorpoints[0] = 100; p.armortype = 1; return true; }
+        break;
+    case 2001: {                                                  // shotgun + 8 shells
+        bool got = giveWeapon(WP_SHOTGUN);
+        if (addAmmo(AM_SHELL, 8)) got = true;
+        return got;
+    }
+    case 2002: {                                                  // chaingun + 20 bullets
+        bool got = giveWeapon(WP_CHAINGUN);
+        if (addAmmo(AM_CLIP, 20)) got = true;
+        return got;
+    }
+    case 2003: {                                                  // rocket launcher + 2 rockets
+        bool got = giveWeapon(WP_MISSILE);
+        if (addAmmo(AM_MISL, 2)) got = true;
+        return got;
+    }
+    case 2004: {                                                  // plasma + 40 cells
+        bool got = giveWeapon(WP_PLASMA);
+        if (addAmmo(AM_CELL, 40)) got = true;
+        return got;
+    }
+    case 2005: return giveWeapon(WP_CHAINSAW);                    // chainsaw
+    case 5:  if (!(p.keys & KEY_BLUE))   { p.keys |= KEY_BLUE;   return true; } break;
+    case 6:  if (!(p.keys & KEY_YELLOW)) { p.keys |= KEY_YELLOW; return true; } break;
+    case 13: if (!(p.keys & KEY_RED))    { p.keys |= KEY_RED;    return true; } break;
+    default: break;
+    }
+    return false;
+}
+}  // namespace
+
+void P_TouchSpecialThings(World& w, mobj_t& mo) {
+    if (&mo != w.player.mo || w.player.dead || w.player.health <= 0) return;
+    const fixed_t r = mo.info ? mo.info->radius : 0;
+    P_BlockThingsIterator(w, mo.x - r, mo.y - r, mo.x + r, mo.y + r,
+        [&](mobj_t& th) {
+            if (!(th.flags & MF_SPECIAL) || th.removePending) return false;
+            fixed_t tr = th.info ? th.info->radius : 0;
+            if (std::abs(th.x - mo.x) > r + tr || std::abs(th.y - mo.y) > r + tr) return false;
+            if (th.z > mo.z + mo.height || th.z + th.height < mo.z) return false;
+            if (touchSpecialThing(w, th)) {
+                ++w.player.itemcount;
+                w.player.bonuscount = 6;
+                if (w.player.mo) w.player.mo->health = w.player.health;   // keep the mobj in sync
+                P_RemoveMobj(w, th);
+            }
+            return false;
+        });
+}
+
+void P_RadiusAttack(World& w, mobj_t& bomb, int damage) {
+    if (damage <= 0) return;
+    const fixed_t range = 128 << FRACBITS;
+    P_BlockThingsIterator(w, bomb.x - range, bomb.y - range, bomb.x + range, bomb.y + range,
+        [&](mobj_t& th) {
+            if (&th == &bomb) return false;
+            if (th.health <= 0 || !(th.flags & MF_SHOOTABLE)) return false;
+            fixed_t dist = (P_AproxDistance(th.x - bomb.x, th.y - bomb.y) -
+                            (th.info ? th.info->radius : 0)) >> FRACBITS;
+            if (dist < 0) dist = 0;
+            if (dist > damage) return false;
+            P_DamageMobj(w, th, bomb.target, damage - static_cast<int>(dist));
+            return false;
+        });
+}
+
+mobj_t* P_SpawnPlayerMissile(World& w, player_t& p, mobjtype_t type) {
+    if (!w.map || !w.bm || !p.mo) return nullptr;
+    mobj_t* mo = p.mo;
+    angle_t ang = mo->angle;
+    fixed_t slope = 0;
+    fixed_t shootz = p.viewz;
+    P_AimLineAttack(w, mo, mo->x, mo->y, shootz, ang, MISSILERANGE, slope);
+
+    const int fi = static_cast<int>((ang >> ANGLETOFINESHIFT) & FINEMASK);
+    const fixed_t speed = mobjinfo[type].speed;
+    const fixed_t dist  = 16 << FRACBITS;
+    mobj_t* th = P_SpawnMobj(w, mo->x + FixedMul(finecosine[fi], dist),
+                             mo->y + FixedMul(finesine[fi], dist), shootz, type);
+    th->angle = ang;
+    th->target = mo;
+    th->momx = FixedMul(finecosine[fi], speed);
+    th->momy = FixedMul(finesine[fi], speed);
+    th->momz = FixedMul(slope, speed);
+    PosCheck pc = P_CheckPosition(*w.map, *w.bm, *th, th->x, th->y);
+    th->floorz = pc.floorz;
+    th->ceilingz = pc.ceilingz;
+    return th;
+}
+
 void P_CalcHeight(const MapData& m, player_t& p) {
     if (!p.mo) return;
     // Eye-height tracks mo->floorz (bbox opening floor = vanilla tmfloorz). P3d fix preserved.
@@ -91,6 +417,7 @@ void P_CalcHeight(const MapData& m, player_t& p) {
 void P_MovePlayer(const MapData& m, const Blockmap& bm, player_t& p,
                   fixed_t forward, fixed_t strafe, angle_t turn) {
     mobj_t* mo = p.mo;
+    if (!mo || p.dead) return;   // corpses don't walk
     mo->angle += turn;   // uint32 modular wraparound
     int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
     fixed_t fc = finecosine[fi];   // forward = (cos, sin) = vanilla

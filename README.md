@@ -4,7 +4,7 @@ A faithful, from-scratch reimplementation of the classic DOOM (1993) engine in
 modern C++17, using SDL2 for windowing/input/audio and software rendering
 matching the original renderer's algorithms.
 
-**Status:** P5a — thinker/mobj system: a live `mobj_t` list driven by a per-tic thinker chain (`P_RunThinkers` → `P_MobjThinker` applies momentum/friction/gravity via `P_XYMovement`/`P_ZMovement`); the player is a `mobj_t` (`World::player.mo`) routed through the same generalized `P_TryMove` collision, and the renderer reads live mobj state each frame (`P_BuildThingsBySubsec` rebuilds the per-subsector render bins). Visible milestone: press **G** in-game to toss an `MT_BARREL` out the player's front that arcs up, lands, slides under friction, and stops against walls; `--tickdump <wad> <bmp> <n> [x y vx vy vz]` visualizes the physics headlessly (spawns a barrel, runs N thinker tics, prints z/momz/x before/after, writes a frame). Earlier: P4 sprite rendering (`render/r_things`: `SpriteCache` decodes `S_START`..`S_END` lumps indexed by sprite/frame/8-way-rotation with mirror; `R_ProjectSprite` + `R_DrawVisSprite` per-column masked draw + distance shade + flip; drawn back-to-front after visplanes, occluded by nearer walls via a per-column `wallDepth` array). The renderer (`r_bsp`/`r_plane`/`r_things`) stays **float** (doomcpp's own from-scratch code; a documented permanent deviation — the collision/play code is 16.16 fixed-point). Still earlier: P3.5 collision/movement fixed-point + `FixedSqrt`; pit HOM band fix (lower-wall/bottomtexture condition was inverted vs vanilla).
+**Status:** P5b — combat + HUD (branch `feat/p5b-combat`, pending in-game acceptance): the player is a live `mobj_t` with health/armor/ammo/weapon state (`player_t`), a vanilla-subset weapon state machine (`play/p_pspr`: pistol/shotgun/chaingun hitscan, rocket/plasma/BFG projectiles, fist/chainsaw melee, raise/lower/refire, ammo switching), `P_LineAttack` auto-aimed hitscan with puff/blood, `P_DamageMobj` (armor absorption, pain chance, knockback, gib death states, corpses, killcount), missile flight/explosion via `P_RadiusAttack`, item pickups (ammo/health/armor/weapons/keys), a first-person weapon sprite (`R_DrawPSprite`, vanilla BASEYCENTER anchoring) and a full status bar (`ui/st_stuff`: STBAR + right-aligned numbers + face + keys) over a vanilla 320x168 view. Controls: **WASD/arrows**, **Ctrl fire**, **1–8 weapons**, **G** toss a barrel, **ESC** quit. Earlier: P5a thinker/mobj physics and toss milestone; P4 sprite rendering; P3.5 fixed-point collision; P3.5d renderer coverage/texture-orientation fixes. Earlier: P4 sprite rendering (`render/r_things`: `SpriteCache` decodes `S_START`..`S_END` lumps indexed by sprite/frame/8-way-rotation with mirror; `R_ProjectSprite` + `R_DrawVisSprite` per-column masked draw + distance shade + flip; drawn back-to-front after visplanes, occluded by nearer walls via a per-column `wallDepth` array). The renderer (`r_bsp`/`r_plane`/`r_things`) stays **float** (doomcpp's own from-scratch code; a documented permanent deviation — the collision/play code is 16.16 fixed-point). Still earlier: P3.5 collision/movement fixed-point + `FixedSqrt`; pit HOM band fix (lower-wall/bottomtexture condition was inverted vs vanilla).
 
 ## Roadmap
 
@@ -20,6 +20,7 @@ matching the original renderer's algorithms.
 - [x] P4 精灵 (r_things: SpriteCache S_START/S_END decode + install/resolve/mirror, SpriteDef doomednum→sprite table, render-only mobj_t, R_ProjectSprite float projection + atan2 8-way rotation, R_DrawVisSprite per-column masked draw + distance shade + flip, per-column wallDepth wall occlusion, drawn back-to-front after visplanes)
 - [x] P5a 思考者/mobj 系统（活对象 + 物理 + 抛桶里程碑）
 - [x] P3.5d 渲染覆盖修复 (upper-wall 条件反转、markCeil/markFloor 单向判断、墙面 V 坐标上下翻转、平面带取整缝隙；`--gapscan`/`--dumptex` 诊断工具)
+- [x] P5b 战斗 + HUD (psprite 武器状态机 + 弹药/切枪、hitscan P_LineAttack + auto-aim、投射物与 P_RadiusAttack、P_DamageMobj/护甲/pain/death/corpse、物品拾取、武器视图精灵、STBAR 状态栏；待实机验收)
 
 ## Build (Windows)
 
@@ -57,6 +58,7 @@ remaining `raw=` pixels are masked/transparent texture texels, which are legitim
 ```bash
 ./build/Release/doomcpp.exe --gapscan assets/freedoom1.wad [angleDeg] [x y]
 ./build/Release/doomcpp.exe --dumptex assets/freedoom1.wad AQTRIM05 out.bmp   # alpha layout
+./build/Release/doomcpp.exe --dumppatch assets/freedoom1.wad STBAR out.bmp    # HUD patch
 ```
 
 ## Assets

@@ -42,6 +42,31 @@ TEST_CASE("P_RemoveMobj erases from the thinker list") {
     CHECK(w.mobjs.size() == 1);
 }
 
+TEST_CASE("P_RemoveMobj defers unlinking during a thinker pass (no iterator invalidation)") {
+    World w;
+    mobj_t* a = P_SpawnMobj(w, 0,0,0, MT_D2013);   // NOGRAVITY: stays put
+    mobj_t* b = P_SpawnMobj(w, 0,0,0, MT_D2013);
+    REQUIRE(w.mobjs.size() == 2);
+    w.thinkering = true;
+    P_RemoveMobj(w, *a);
+    CHECK(w.mobjs.size() == 2);                    // deferred, not erased yet
+    CHECK(a->removePending == true);
+    w.thinkering = false;
+    P_RunThinkers(w);                              // pass skips it, then unlinks
+    CHECK(w.mobjs.size() == 1);
+    CHECK(b->removePending == false);
+}
+
+TEST_CASE("P_SetMobjState(S_NULL) clears the render cache") {
+    World w;
+    mobj_t* m = P_SpawnMobj(w, 0,0,0, MT_D2013);   // SOUL, fullbright
+    REQUIRE(std::string(m->sprname) == "SOUL");
+    P_SetMobjState(*m, S_NULL);
+    CHECK(std::string(m->sprname) == "");           // nothing to draw
+    CHECK(m->tics == -1);
+    CHECK(m->fullbright == false);
+}
+
 namespace {
 fixed_t PF(int v){ return static_cast<fixed_t>(v)<<FRACBITS; }
 // 单开放 sector（floor 0 ceil 128），单 subsector、无 node。seg/frontsector 让
