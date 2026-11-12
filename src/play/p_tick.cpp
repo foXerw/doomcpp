@@ -1,5 +1,6 @@
 #include "p_tick.h"
 #include "p_mobj.h"
+#include "p_pspr.h"
 #include "p_setup.h"
 #include "p_maputl.h"
 #include "p_map.h"      // VIEWHEIGHT
@@ -36,9 +37,22 @@ void P_SetupLevel(World& w, const MapData& m) {
             mo.light    = m.sectors[sec].lightlevel;
         }
     }
-    // 玩家初始 viewz
+    // P5b: reset combat state and give the player the pistol (vanilla G_PlayerReborn subset).
     if (w.player.mo) {
-        w.player.viewz = w.player.mo->floorz + VIEWHEIGHT;
+        mobj_t* mo = w.player.mo;
+        fixed_t viewz = mo->floorz + VIEWHEIGHT;
+        w.player = player_t{};
+        w.player.mo = mo;
+        w.player.viewz = viewz;
+        w.player.health = mobjinfo[MT_PLAYER].spawnhealth;
+        mo->health = w.player.health;
+        for (int i = 0; i < NUMAMMO; ++i) w.player.maxammo[i] = ammoinfo[i].maxammo;
+        w.player.ammo[AM_CLIP] = 50;                          // vanilla pistol start
+        w.player.weapons = (1u << WP_FIST) | (1u << WP_PISTOL);
+        w.player.readyweapon = WP_PISTOL;
+        w.player.pendingweapon = NUMWEAPONS;                  // no change pending
+        P_SetPsprite(w, w.player, 0, weaponinfo[WP_PISTOL].readystate);
+        P_SetPsprite(w, w.player, 1, S_NULL);
     }
 }
 

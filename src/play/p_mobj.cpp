@@ -50,16 +50,17 @@ static void P_ZMovement(const World& w, mobj_t& mo) {
     if (!(mo.flags & MF_NOGRAVITY)) mo.momz -= GRAVITY;
     mo.z += mo.momz;
     if (mo.z <= mo.floorz) { if (mo.momz < 0) mo.momz = 0; mo.z = mo.floorz; }   // 落地
-    fixed_t cz = mo.ceilingz - (mo.info ? mo.info->height : 0);
+    fixed_t h = mo.height ? mo.height : (mo.info ? mo.info->height : 0);
+    fixed_t cz = mo.ceilingz - h;
     if (mo.z >= cz) { mo.z = cz; if (mo.momz > 0) mo.momz = 0; }                 // 撞顶
 }
 
 void P_MobjThinker(World& w, mobj_t& mo) {
     if (mo.momx || mo.momy) P_XYMovement(w, mo);
     if (mo.momz || !(mo.flags & MF_NOGRAVITY)) P_ZMovement(w, mo);
-    // 状态推进（P5a spawnstate 均 tics=-1，本分支不触发；为 P5b 及死亡状态留接口）
+    // State advance (vanilla): entering S_NULL removes the mobj (puffs/blood/explosions).
     if (mo.state && mo.state->tics != -1 && mo.tics > 0) {
-        if (--mo.tics == 0) P_SetMobjState(mo, mo.state->nextstate);
+        if (--mo.tics == 0) P_SetMobjState(w, mo, mo.state->nextstate);
     }
 }
 
@@ -68,6 +69,7 @@ mobj_t* P_SpawnMobj(World& w, fixed_t x, fixed_t y, fixed_t z, mobjtype_t type) 
     mobj_t& m = w.mobjs.back();
     m.x = x; m.y = y; m.z = z;
     m.info = &mobjinfo[type];
+    m.height = m.info->height;
     m.health = m.info->spawnhealth;
     m.flags = m.info->flags;
     P_SetMobjState(m, m.info->spawnstate);
@@ -93,6 +95,11 @@ void P_SetMobjState(mobj_t& m, statenum_t sn) {
         m.sprname[0] = '\0';
     m.frame = static_cast<char>('A' + (m.state->frame & FF_FRAMEMASK));
     m.fullbright = (m.state->frame & FF_FULLBRIGHT) != 0;
+}
+
+void P_SetMobjState(World& w, mobj_t& m, statenum_t sn) {
+    if (sn == S_NULL) { P_RemoveMobj(w, m); return; }   // vanilla: state S_NULL unlinks
+    P_SetMobjState(m, sn);
 }
 
 void P_RemoveMobj(World& w, mobj_t& m) {

@@ -32,6 +32,38 @@ TEST_CASE("P_SetupLevel spawns one mobj per known thing + player as mo") {
     CHECK(w.player.mo->y == F(500));
 }
 
+TEST_CASE("P_SetupLevel initializes P5b combat state (100 hp, 50 clip, pistol ready)") {
+    MapData m = oneSectorMap();
+    m.things.push_back({256,256,90,1});      // player start
+    World w; w.map = &m; w.bm = &m.blockmap;
+    P_SetupLevel(w, m);
+    REQUIRE(w.player.mo != nullptr);
+    CHECK(w.player.health == 100);
+    CHECK(w.player.mo->health == 100);
+    CHECK(w.player.ammo[AM_CLIP] == 50);
+    CHECK(w.player.maxammo[AM_CLIP] == 200);
+    CHECK(w.player.weapons == ((1u << WP_FIST) | (1u << WP_PISTOL)));
+    CHECK(w.player.readyweapon == WP_PISTOL);
+    CHECK(w.player.pendingweapon == NUMWEAPONS);
+    REQUIRE(w.player.psprites[0].state != nullptr);
+    CHECK(w.player.psprites[0].state == &states[S_PISTOL]);
+    CHECK(w.player.psprites[1].state == &states[S_NULL]);
+}
+
+TEST_CASE("P_PlayerThink decrements HUD timers and advances psprite states") {
+    MapData m = oneSectorMap();
+    m.things.push_back({256,256,90,1});
+    World w; w.map = &m; w.bm = &m.blockmap;
+    P_SetupLevel(w, m);
+    w.player.damagecount = 3;
+    w.player.bonuscount  = 2;
+    for (int i = 0; i < 3; ++i) P_PlayerThink(w, false, -1);
+    CHECK(w.player.damagecount == 0);
+    CHECK(w.player.bonuscount  == 0);
+    // S_PISTOL has tics=1 and nextstate=S_PISTOL: it re-enters every tic (A_WeaponReady).
+    CHECK(w.player.psprites[0].state == &states[S_PISTOL]);
+}
+
 TEST_CASE("P_BuildThingsBySubsec bins mobjs by subsector, skips player.mo") {
     MapData m = oneSectorMap();
     m.things.push_back({256,256,90,2035});

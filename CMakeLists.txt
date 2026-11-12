@@ -26,6 +26,9 @@ add_library(doomcore STATIC
     src/play/p_map.cpp
     src/play/p_mobj.cpp
     src/play/p_tick.cpp
+    src/play/p_pspr.cpp
+    src/play/p_user.cpp
+    src/play/p_inter.cpp
     src/play/info.cpp
     src/render/r_draw.cpp
     src/render/r_data.cpp

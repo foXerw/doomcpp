@@ -7,6 +7,7 @@
 // （Task 3）；Task 2 期间 main.cpp 仍直接填写它们。z 现为 16.16 定点（P4 是 int map units）。
 struct mobj_t {
     fixed_t x = 0, y = 0, z = 0;            // 16.16
+    fixed_t height = 0;                      // per-mobj collision height (P5b corpses shrink)
     fixed_t momx = 0, momy = 0, momz = 0;   // 动量（Task 6 物理）
     angle_t angle = 0;                      // BAM
     fixed_t floorz = 0, ceilingz = 0, dropoffz = 0;
