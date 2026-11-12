@@ -82,6 +82,7 @@ bool pollEvents(Input& input) {
     input.turnRight   = kb[SDL_SCANCODE_RIGHT];
     input.strafeLeft  = kb[SDL_SCANCODE_A];
     input.strafeRight = kb[SDL_SCANCODE_D];
+    input.fire        = kb[SDL_SCANCODE_LCTRL] || kb[SDL_SCANCODE_RCTRL];
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return false;
@@ -90,6 +91,13 @@ bool pollEvents(Input& input) {
         if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_G &&
             ev.key.repeat == 0)
             input.spawn = true;
+        // P5b weapon slots: 1-8 -> fist/chainsaw/pistol/shotgun/chaingun/rocket/plasma/bfg.
+        if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+            ev.key.keysym.scancode >= SDL_SCANCODE_1 && ev.key.keysym.scancode <= SDL_SCANCODE_8) {
+            // Slot 0..7 matches weapontype_t order (fist/chainsaw/pistol/shotgun/
+            // chaingun/rocket/plasma/bfg); main passes it straight to P_PlayerThink.
+            input.weaponSwitch = ev.key.keysym.scancode - SDL_SCANCODE_1;
+        }
     }
     return true;
 }

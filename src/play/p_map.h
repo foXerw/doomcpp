@@ -17,6 +17,7 @@ constexpr fixed_t MAXMOVE      = 30 << FRACBITS;   // per-tic displacement cap
 constexpr fixed_t STEP_LIMIT   = 24 << FRACBITS;   // step-up / dropoff limit
 constexpr int     MAPBLOCKSHIFT = FRACBITS + 7;    // MAPBLOCK = 128 = 2^7
 constexpr fixed_t MISSILERANGE = 32 * 64 << FRACBITS;   // vanilla p_local.h
+constexpr fixed_t MELEERANGE   = 64 << FRACBITS;        // vanilla p_local.h
 
 struct PosCheck { fixed_t floorz = 0, ceilingz = 0, dropoffz = 0; bool ok = true; };
 
@@ -43,3 +44,10 @@ mobj_t* P_AimLineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t 
                         angle_t angle, fixed_t distance, fixed_t& slopeOut);
 mobj_t* P_SpawnPuff(World& w, fixed_t x, fixed_t y, fixed_t z);
 mobj_t* P_SpawnBlood(World& w, fixed_t x, fixed_t y, fixed_t z, int damage);
+
+// P5b projectiles: spawn a player missile (auto-aimed) and apply radius damage.
+mobj_t* P_SpawnPlayerMissile(World& w, player_t& p, mobjtype_t type);
+void    P_RadiusAttack(World& w, mobj_t& bomb, int damage);
+
+// P5b item pickup (vanilla P_TouchSpecialThing): called after the player moves.
+void P_TouchSpecialThings(World& w, mobj_t& mo);

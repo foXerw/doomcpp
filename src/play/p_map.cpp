@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <iterator>
 #include <limits>
 
 // Vanilla m_fixed.c::P_AproxDistance (sqrt-free): |dx|+|dy| - min/2.
@@ -82,11 +83,18 @@ bool P_TrySlide(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t dx, fi
 
 void P_BlockThingsIterator(World& w, fixed_t x1, fixed_t y1, fixed_t x2, fixed_t y2,
                            const std::function<bool(mobj_t&)>& fn) {
-    for (mobj_t& mo : w.mobjs) {
-        if (mo.removePending) continue;
-        fixed_t r = mo.info ? mo.info->radius : 0;
-        if (mo.x + r <= x1 || mo.x - r >= x2 || mo.y + r <= y1 || mo.y - r >= y2) continue;
-        if (fn(mo)) return;
+    // Lookahead: the callback may remove the current mobj (damage with no death state);
+    // `next` stays valid because std::list only invalidates the erased node.
+    for (auto it = w.mobjs.begin(); it != w.mobjs.end(); ) {
+        auto next = std::next(it);
+        if (!it->removePending) {
+            mobj_t& mo = *it;
+            fixed_t r = mo.info ? mo.info->radius : 0;
+            if (!(mo.x + r <= x1 || mo.x - r >= x2 || mo.y + r <= y1 || mo.y - r >= y2)) {
+                if (fn(mo)) return;
+            }
+        }
+        it = next;
     }
 }
 
@@ -259,6 +267,139 @@ mobj_t* P_AimLineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t 
         slopeOut = static_cast<fixed_t>((targetZ - oz) / (bestT > 1e-6 ? bestT : 1.0) * FRACUNIT);
     }
     return best;
+}
+
+namespace {
+// Applies one special thing to the player. Returns true when it was consumed.
+bool touchSpecialThing(World& w, mobj_t& thing) {
+    player_t& p = w.player;
+    const int dn = thing.info ? thing.info->doomednum : -1;
+    auto addAmmo = [&](ammotype_t at, int amount) {
+        int& a = p.ammo[at];
+        if (a >= p.maxammo[at]) return false;
+        a = std::min(p.maxammo[at], a + amount);
+        return true;
+    };
+    auto giveWeapon = [&](weapontype_t wp) {
+        if (p.weapons & (1u << wp)) return false;
+        p.weapons |= (1u << wp);
+        return true;
+    };
+    switch (dn) {
+    case 2007: if (addAmmo(AM_CLIP, 10))  return true; break;    // clip
+    case 2048: if (addAmmo(AM_CLIP, 50))  return true; break;    // box of bullets
+    case 2008: if (addAmmo(AM_SHELL, 4))  return true; break;    // shells
+    case 2049: if (addAmmo(AM_SHELL, 20)) return true; break;    // box of shells
+    case 2010: if (addAmmo(AM_MISL, 1))   return true; break;    // rocket
+    case 2046: if (addAmmo(AM_MISL, 5))   return true; break;    // box of rockets
+    case 2011:                                                    // stimpack
+        if (p.health < 100) { p.health = std::min(100, p.health + 10); return true; }
+        break;
+    case 2012:                                                    // medikit
+        if (p.health < 100) { p.health = std::min(100, p.health + 25); return true; }
+        break;
+    case 2013:                                                    // soul sphere
+        if (p.health < 200) { p.health = std::min(200, p.health + 100); return true; }
+        break;
+    case 2014:                                                    // health bonus
+        if (p.health < 200) { p.health = std::min(200, p.health + 1); return true; }
+        break;
+    case 2015:                                                    // armor bonus
+        if (p.armorpoints[0] < 200) {
+            p.armorpoints[0] = std::min(200, p.armorpoints[0] + 1);
+            if (p.armortype == 0) p.armortype = 1;
+            return true;
+        }
+        break;
+    case 2018:                                                    // green armor
+        if (p.armorpoints[0] < 100) { p.armorpoints[0] = 100; p.armortype = 1; return true; }
+        break;
+    case 2001: {                                                  // shotgun + 8 shells
+        bool got = giveWeapon(WP_SHOTGUN);
+        if (addAmmo(AM_SHELL, 8)) got = true;
+        return got;
+    }
+    case 2002: {                                                  // chaingun + 20 bullets
+        bool got = giveWeapon(WP_CHAINGUN);
+        if (addAmmo(AM_CLIP, 20)) got = true;
+        return got;
+    }
+    case 2003: {                                                  // rocket launcher + 2 rockets
+        bool got = giveWeapon(WP_MISSILE);
+        if (addAmmo(AM_MISL, 2)) got = true;
+        return got;
+    }
+    case 2004: {                                                  // plasma + 40 cells
+        bool got = giveWeapon(WP_PLASMA);
+        if (addAmmo(AM_CELL, 40)) got = true;
+        return got;
+    }
+    case 2005: return giveWeapon(WP_CHAINSAW);                    // chainsaw
+    case 5:  if (!(p.keys & KEY_BLUE))   { p.keys |= KEY_BLUE;   return true; } break;
+    case 6:  if (!(p.keys & KEY_YELLOW)) { p.keys |= KEY_YELLOW; return true; } break;
+    case 13: if (!(p.keys & KEY_RED))    { p.keys |= KEY_RED;    return true; } break;
+    default: break;
+    }
+    return false;
+}
+}  // namespace
+
+void P_TouchSpecialThings(World& w, mobj_t& mo) {
+    if (&mo != w.player.mo || w.player.dead || w.player.health <= 0) return;
+    const fixed_t r = mo.info ? mo.info->radius : 0;
+    P_BlockThingsIterator(w, mo.x - r, mo.y - r, mo.x + r, mo.y + r,
+        [&](mobj_t& th) {
+            if (!(th.flags & MF_SPECIAL) || th.removePending) return false;
+            fixed_t tr = th.info ? th.info->radius : 0;
+            if (std::abs(th.x - mo.x) > r + tr || std::abs(th.y - mo.y) > r + tr) return false;
+            if (th.z > mo.z + mo.height || th.z + th.height < mo.z) return false;
+            if (touchSpecialThing(w, th)) {
+                ++w.player.itemcount;
+                w.player.bonuscount = 6;
+                P_RemoveMobj(w, th);
+            }
+            return false;
+        });
+}
+
+void P_RadiusAttack(World& w, mobj_t& bomb, int damage) {
+    if (damage <= 0) return;
+    const fixed_t range = 128 << FRACBITS;
+    P_BlockThingsIterator(w, bomb.x - range, bomb.y - range, bomb.x + range, bomb.y + range,
+        [&](mobj_t& th) {
+            if (&th == &bomb) return false;
+            if (th.health <= 0 || !(th.flags & MF_SHOOTABLE)) return false;
+            fixed_t dist = (P_AproxDistance(th.x - bomb.x, th.y - bomb.y) -
+                            (th.info ? th.info->radius : 0)) >> FRACBITS;
+            if (dist < 0) dist = 0;
+            if (dist > damage) return false;
+            P_DamageMobj(w, th, bomb.target, damage - static_cast<int>(dist));
+            return false;
+        });
+}
+
+mobj_t* P_SpawnPlayerMissile(World& w, player_t& p, mobjtype_t type) {
+    if (!w.map || !w.bm || !p.mo) return nullptr;
+    mobj_t* mo = p.mo;
+    angle_t ang = mo->angle;
+    fixed_t slope = 0;
+    fixed_t shootz = p.viewz;
+    P_AimLineAttack(w, mo, mo->x, mo->y, shootz, ang, MISSILERANGE, slope);
+
+    const int fi = static_cast<int>((ang >> ANGLETOFINESHIFT) & FINEMASK);
+    const fixed_t speed = mobjinfo[type].speed;
+    const fixed_t dist  = 16 << FRACBITS;
+    mobj_t* th = P_SpawnMobj(w, mo->x + FixedMul(finecosine[fi], dist),
+                             mo->y + FixedMul(finesine[fi], dist), shootz, type);
+    th->angle = ang;
+    th->target = mo;
+    th->momx = FixedMul(finecosine[fi], speed);
+    th->momy = FixedMul(finesine[fi], speed);
+    th->momz = FixedMul(slope, speed);
+    PosCheck pc = P_CheckPosition(*w.map, *w.bm, *th, th->x, th->y);
+    th->floorz = pc.floorz;
+    th->ceilingz = pc.ceilingz;
+    return th;
 }
 
 void P_CalcHeight(const MapData& m, player_t& p) {

@@ -15,6 +15,7 @@
 #include "play/info.h"
 #include "play/p_setup.h"
 #include "play/p_tick.h"
+#include "play/p_pspr.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
@@ -31,6 +32,17 @@ static float bamToRendererRad(angle_t a) {
     constexpr double PI = 3.141592653589793;
     double aRad = static_cast<double>(a) * (2.0 * PI / 4294967296.0);
     return static_cast<float>(PI / 2.0 - aRad);
+}
+
+// Overlay the player's first-person weapon/flash sprites after the 3D view.
+static void drawPlayerSprites(const World& w, const SpriteCache& sprites,
+                              std::uint32_t* fb, int fw, int fh) {
+    for (int i = 0; i < 2; ++i) {
+        const pspdef_t& ps = w.player.psprites[i];
+        if (!ps.state || ps.state->sprite == SPR_NONE) continue;
+        char frame = static_cast<char>('A' + (ps.state->frame & FF_FRAMEMASK));
+        R_DrawPSprite(fb, fw, fh, sprnames[ps.state->sprite], frame, ps.sx, ps.sy, sprites);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -134,6 +146,7 @@ int main(int argc, char** argv) {
                              static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                              bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
                              &sprites, &w.thingsBySubsec);
+                drawPlayerSprites(w, sprites, fb.data(), FW, FH);
                 writeBMP(argv[i + 2], fb.data(), FW, FH);
                 // Rendered mobs exclude the player (camera): P_SetupLevel spawns it into w.mobjs
                 // as w.player.mo, but P_BuildThingsBySubsec skips it from the render bins. The
@@ -263,6 +276,25 @@ int main(int argc, char** argv) {
                     P_MovePlayer(map, map.blockmap, w.player, 0, 0, degreesToBam(4));
                 check(w.player.mo->angle != a0, "turning changes the player angle");
 
+                // Weapon path: put a barrel in front and hold fire; the pistol must damage it.
+                {
+                    mobj_t* mo = w.player.mo;
+                    int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                    fixed_t dist = 96 << FRACBITS;
+                    mobj_t* target = P_SpawnMobj(
+                        w, mo->x + FixedMul(finecosine[fi], dist),
+                        mo->y + FixedMul(finesine[fi], dist), mo->z, MT_BARREL);
+                    int hp0 = target->health;
+                    w.player.ammo[AM_CLIP] = 50;
+                    w.player.readyweapon = WP_PISTOL;
+                    P_SetPsprite(w, w.player, 0, S_PISTOL);
+                    for (int t = 0; t < 40; ++t) {
+                        P_PlayerThink(w, true, -1);
+                        P_RunThinkers(w);
+                    }
+                    check(target->health < hp0, "pistol fire damages a barrel in front");
+                }
+
                 // Render path: a static frame must contain actual geometry, not just clear color.
                 P_BuildThingsBySubsec(w);
                 std::vector<std::uint32_t> fb(static_cast<size_t>(320) * 200, 0);
@@ -373,8 +405,11 @@ int main(int argc, char** argv) {
                 int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
                 int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
+                P_PlayerThink(w, in.fire, in.weaponSwitch);   // P5b weapons/psprites
+                in.weaponSwitch = -1;                         // edge-triggered slot
                 P_MovePlayer(map, map.blockmap, w.player,
                              fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                P_TouchSpecialThings(w, *w.player.mo);   // P5b pickups
                 P_RunThinkers(w);
                 ++ticCount;
             }
@@ -385,6 +420,7 @@ int main(int argc, char** argv) {
                          bamToRendererRad(w.player.mo->angle),
                          static_cast<float>(w.player.viewz >> FRACBITS),
                          ticCount, &sprites, &w.thingsBySubsec);
+            drawPlayerSprites(w, sprites, fb.data(), FB_W, FB_H);
             i_video::present(fb.data());
         }
 

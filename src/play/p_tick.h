@@ -9,6 +9,8 @@
 struct MapData;
 struct Blockmap;
 
+constexpr int KEY_BLUE = 1, KEY_YELLOW = 2, KEY_RED = 4;
+
 // First-person weapon/flash sprite state (vanilla pspdef_t). sx/sy are screen offsets in
 // 16.16 map units; P5b keeps them at 0 (the WAD's weapon sprites are pre-offset).
 struct pspdef_t {

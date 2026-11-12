@@ -202,3 +202,27 @@ void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
         }
     }
 }
+
+void R_DrawPSprite(uint32_t* fb, int w, int h, const char* sprname, char frame,
+                   fixed_t sx, fixed_t sy, const SpriteCache& sprites) {
+    if (!sprname || !sprname[0]) return;
+    SpriteCache::View v = sprites.resolve(sprname, frame, 0);
+    if (!v.patch) return;
+    const Patch& p = *v.patch;
+    // Vanilla R_DrawPSprite anchors (pspritescale == 1 at 320x200):
+    //   x = centerx + (psp->sx - 160) - leftoffset
+    //   texturemid = BASEYCENTER + 0.5 - (psp->sy - topoffset); top = centery - texturemid
+    const int destX = w / 2 - 160 + static_cast<int>(sx >> FRACBITS) - p.leftoffset;
+    const int destY = h / 2 - 100 + static_cast<int>(sy >> FRACBITS) - p.topoffset;
+    for (int py = 0; py < p.height; ++py) {
+        const int y = destY + py;
+        if (y < 0 || y >= h) continue;
+        for (int px = 0; px < p.width; ++px) {
+            const int x = destX + (v.flip ? (p.width - 1 - px) : px);
+            if (x < 0 || x >= w) continue;
+            const uint32_t texel = p.rgba[static_cast<size_t>(py) * p.width + px];
+            if (!(texel & 0xFFu)) continue;                 // transparent
+            fb[static_cast<size_t>(y) * w + x] = texel;      // psprites are fullbright
+        }
+    }
+}

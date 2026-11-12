@@ -1,5 +1,6 @@
 #include "p_mobj.h"
 #include "p_tick.h"
+#include "p_inter.h"        // P_DamageMobj (missile impacts)
 #include "p_maputl.h"
 #include "p_setup.h"
 #include "p_map.h"          // P_TryMove, MAXMOVE, VIEWHEIGHT
@@ -9,6 +10,25 @@
 #include <cstring>
 
 namespace {
+// Mobjs whose state carries A_Explode/A_BFGSpray apply radius damage on state entry.
+void P_DoMobjAction(World& w, mobj_t& mo, action_t action) {
+    switch (action) {
+    case A_Explode:   P_RadiusAttack(w, mo, 128); break;
+    case A_BFGSpray:  if (mo.info) P_RadiusAttack(w, mo, mo.info->damage); break;
+    default:          break;   // AI/sound actions are P6/P7
+    }
+}
+
+// Missile impact: stop moving, drop MF_MISSILE, enter the explosion/death state (which
+// dispatches A_Explode for rockets/barrels) or unlink when there is none (plasma).
+void P_ExplodeMissile(World& w, mobj_t& mo) {
+    mo.momx = mo.momy = mo.momz = 0;
+    mo.flags &= ~MF_MISSILE;
+    statenum_t ds = (mo.info && mo.info->deathstate != S_NULL) ? mo.info->deathstate : S_NULL;
+    if (ds == S_NULL) { P_RemoveMobj(w, mo); return; }
+    P_SetMobjState(w, mo, ds);
+}
+
 // vanilla p_mobj.c physics constants (qualitative tests; tunable).
 constexpr fixed_t STOPSPEED = 0x1000;     // vanilla p_mobj.c
 constexpr fixed_t FRICTION  = 0xe800;     // vanilla ORIG_FRICTION
@@ -24,7 +44,7 @@ fixed_t apx(fixed_t dx, fixed_t dy) {
 
 // Vanilla p_mobj.c::P_XYMovement：按 MAXMOVE 分步走 P_TryMove，撞墙即停；之后摩擦（每 tic 衰减，
 // 小于 STOPSPEED 直接归零）。注意碰撞判据是位置——动量可能非零但被墙挡住逐 tic 衰减。
-static void P_XYMovement(const World& w, mobj_t& mo) {
+static void P_XYMovement(World& w, mobj_t& mo) {
     fixed_t xleft = mo.momx, yleft = mo.momy;
     while (xleft != 0 || yleft != 0) {
         fixed_t xl = xleft, yl = yleft;
@@ -41,6 +61,7 @@ static void P_XYMovement(const World& w, mobj_t& mo) {
     }
     if (apx(mo.momx, mo.momy) < STOPSPEED) { mo.momx = 0; mo.momy = 0; }
     else { mo.momx = FixedMul(mo.momx, FRICTION); mo.momy = FixedMul(mo.momy, FRICTION); }
+    if (&mo == w.player.mo) P_TouchSpecialThings(w, mo);   // P5b pickups on move/knockback
 }
 
 // Vanilla p_mobj.c::P_ZMovement：重力（MF_NOGRAVITY 除外）、落地（z<=floorz 清 momz）、
@@ -52,12 +73,44 @@ static void P_ZMovement(const World& w, mobj_t& mo) {
     if (mo.z <= mo.floorz) { if (mo.momz < 0) mo.momz = 0; mo.z = mo.floorz; }   // 落地
     fixed_t h = mo.height ? mo.height : (mo.info ? mo.info->height : 0);
     fixed_t cz = mo.ceilingz - h;
-    if (mo.z >= cz) { mo.z = cz; if (mo.momz > 0) mo.momz = 0; }                 // 撞顶
+    if (cz < mo.floorz) cz = mo.floorz;   // degenerate/未初始化 sector：不要把物体压穿地板
+    if (mo.z > cz) { mo.z = cz; if (mo.momz > 0) mo.momz = 0; }                 // 撞顶
 }
 
 void P_MobjThinker(World& w, mobj_t& mo) {
-    if (mo.momx || mo.momy) P_XYMovement(w, mo);
-    if (mo.momz || !(mo.flags & MF_NOGRAVITY)) P_ZMovement(w, mo);
+    if (mo.flags & MF_MISSILE) {
+        const fixed_t ox = mo.x, oy = mo.y;
+        const bool hadMom = (mo.momx || mo.momy);
+        if (hadMom) P_XYMovement(w, mo);
+        if (mo.momz || !(mo.flags & MF_NOGRAVITY)) P_ZMovement(w, mo);
+
+        const bool blocked = hadMom && mo.x == ox && mo.y == oy;
+        const bool hitVert = (mo.momz < 0 && mo.z <= mo.floorz) ||
+                             (mo.momz > 0 && mo.z >= mo.ceilingz - mo.height);
+
+        mobj_t* touched = nullptr;
+        const fixed_t r = mo.info ? mo.info->radius : 0;
+        P_BlockThingsIterator(w, mo.x - r, mo.y - r, mo.x + r, mo.y + r,
+            [&](mobj_t& th) {
+                if (&th == &mo || &th == mo.target) return false;
+                if (th.health <= 0 || !(th.flags & MF_SHOOTABLE)) return false;
+                fixed_t tr = th.info ? th.info->radius : 0;
+                if (std::abs(th.x - mo.x) <= tr + r && std::abs(th.y - mo.y) <= tr + r) {
+                    touched = &th;
+                    return true;
+                }
+                return false;
+            });
+        if (touched) {
+            P_DamageMobj(w, *touched, mo.target, mo.info ? mo.info->damage : 0);
+            P_ExplodeMissile(w, mo);
+            return;
+        }
+        if (blocked || hitVert) { P_ExplodeMissile(w, mo); return; }
+    } else {
+        if (mo.momx || mo.momy) P_XYMovement(w, mo);
+        if (mo.momz || !(mo.flags & MF_NOGRAVITY)) P_ZMovement(w, mo);
+    }
     // State advance (vanilla): entering S_NULL removes the mobj (puffs/blood/explosions).
     if (mo.state && mo.state->tics != -1 && mo.tics > 0) {
         if (--mo.tics == 0) P_SetMobjState(w, mo, mo.state->nextstate);
@@ -74,6 +127,19 @@ mobj_t* P_SpawnMobj(World& w, fixed_t x, fixed_t y, fixed_t z, mobjtype_t type) 
     m.flags = m.info->flags;
     P_SetMobjState(m, m.info->spawnstate);
     P_SetThingPosition(w, m);
+    // Seed floor/ceiling from the spawn sector so gravity/ceiling clamps are sane before the
+    // first P_TryMove (runtime spawns: puffs, blood, missiles, tossed barrels).
+    if (w.map) {
+        int sec = sectorOf(*w.map, m.subsector);
+        if (sec >= 0) {
+            m.floorz   = static_cast<fixed_t>(w.map->sectors[sec].floorheight)   << FRACBITS;
+            m.ceilingz = static_cast<fixed_t>(w.map->sectors[sec].ceilingheight) << FRACBITS;
+            if (m.z < m.floorz) m.z = m.floorz;
+            fixed_t maxz = m.ceilingz - m.height;
+            if (maxz < m.floorz) maxz = m.floorz;
+            if (m.z > maxz) m.z = maxz;
+        }
+    }
     return &m;
 }
 
@@ -100,6 +166,7 @@ void P_SetMobjState(mobj_t& m, statenum_t sn) {
 void P_SetMobjState(World& w, mobj_t& m, statenum_t sn) {
     if (sn == S_NULL) { P_RemoveMobj(w, m); return; }   // vanilla: state S_NULL unlinks
     P_SetMobjState(m, sn);
+    P_DoMobjAction(w, m, m.state->action);               // vanilla calls the action on entry
 }
 
 void P_RemoveMobj(World& w, mobj_t& m) {

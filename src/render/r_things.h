@@ -74,3 +74,9 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
 void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
                      float eyeZ, float focal,
                      const std::vector<float>& wallDepth);
+
+// P5b first-person weapon/flash sprite (vanilla R_DrawPSprite subset, 1:1 scale):
+// x = center + sx - patch.leftoffset, y = h/2 - 100 + sy - patch.topoffset (vanilla
+// BASEYCENTER=100 anchoring). Fullbright; transparent texels skipped; flip supported.
+void R_DrawPSprite(uint32_t* fb, int w, int h, const char* sprname, char frame,
+                   fixed_t sx, fixed_t sy, const SpriteCache& sprites);
