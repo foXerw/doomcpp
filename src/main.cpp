@@ -314,23 +314,36 @@ int main(int argc, char** argv) {
                     check(target->health < hp0, "pistol fire damages a barrel in front");
                 }
 
-                // P6a: find a use-activated door and open it; its back sector ceiling must rise.
+                // P6a: synthetic door next to the player (room | closed door). Activate it and
+                // require the door sector's ceiling to rise; this exercises the real mover path.
                 {
-                    bool tested = false;
-                    for (const line_t& L : map.lines) {
-                        if (L.special != 1 && L.special != 31 && L.special != 2 && L.special != 4)
-                            continue;
-                        int back = (L.sidenum[1] >= 0) ? map.sides[L.sidenum[1]].sector : -1;
-                        if (back < 0) continue;
-                        int c0 = map.sectors[back].ceilingheight;
-                        P_ActivateLine(w, L, w.player.mo);
-                        for (int t = 0; t < 70; ++t) P_RunThinkers(w);
-                        check(map.sectors[back].ceilingheight > c0,
-                              "use-activating a door raises its ceiling");
-                        tested = true;
-                        break;
-                    }
-                    if (!tested) std::cout << "SKIP: no use-door special in this map\n";
+                    const int roomSec = static_cast<int>(map.sectors.size());
+                    sector_t R; R.floorheight = 0; R.ceilingheight = 128;
+                    map.sectors.push_back(R);
+                    const int doorSec = static_cast<int>(map.sectors.size());
+                    sector_t D; D.floorheight = 0; D.ceilingheight = 0;
+                    map.sectors.push_back(D);
+                    const int sideRoom = static_cast<int>(map.sides.size());
+                    side_t sr; sr.sector = roomSec; map.sides.push_back(sr);
+                    const int sideDoor = static_cast<int>(map.sides.size());
+                    side_t sd; sd.sector = doorSec; map.sides.push_back(sd);
+
+                    const fixed_t lx = w.player.mo->x + (32 << FRACBITS);
+                    const fixed_t ly = w.player.mo->y;
+                    const int v0 = static_cast<int>(map.vertices.size());
+                    map.vertices.push_back({lx, ly - (1000 << FRACBITS)});
+                    map.vertices.push_back({lx, ly + (1000 << FRACBITS)});
+                    line_t L; L.v1 = v0; L.v2 = v0 + 1; L.flags = ML_TWOSIDED;
+                    L.special = 1; L.tag = 0;
+                    L.sidenum[0] = sideDoor;    // east (front) = door
+                    L.sidenum[1] = sideRoom;    // west = player's room
+                    const int li = static_cast<int>(map.lines.size());
+                    map.lines.push_back(L);
+
+                    P_ActivateLine(w, map.lines[li], w.player.mo);
+                    for (int t = 0; t < 70; ++t) P_RunThinkers(w);
+                    check(map.sectors[doorSec].ceilingheight > 0,
+                          "use-activating a door raises its ceiling");
                 }
 
                 // Render path: a static frame must contain actual geometry, not just clear color.

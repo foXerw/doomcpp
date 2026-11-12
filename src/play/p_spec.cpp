@@ -220,8 +220,22 @@ void P_RunMovers(World& w) {
         int& h = (mv.kind == MoverKind::Door || mv.kind == MoverKind::Ceiling)
                      ? s.ceilingheight : s.floorheight;
         const int target = (mv.state == 0) ? mv.top : mv.bottom;
-        if (h < target)      h = std::min(h + mv.speed, target);
-        else if (h > target) h = std::max(h - mv.speed, target);
+        int newH = h;
+        if (h < target)      newH = std::min(h + mv.speed, target);
+        else if (h > target) newH = std::max(h - mv.speed, target);
+
+        // A closing door reverses if a standing thing would be crushed (vanilla).
+        if (mv.kind == MoverKind::Door && mv.state == 2 && newH < h) {
+            const fixed_t nc = static_cast<fixed_t>(newH) << FRACBITS;
+            bool blocked = false;
+            for (const mobj_t& mo : w.mobjs) {
+                if (mo.removePending) continue;
+                if (sectorOf(*w.map, R_PointInSubsector(*w.map, mo.x, mo.y)) != mv.sector) continue;
+                if (mo.z + mo.height > nc) { blocked = true; break; }
+            }
+            if (blocked) { mv.state = 0; mv.waitTics = 0; continue; }
+        }
+        h = newH;
         syncSectorThings(w, mv.sector);
 
         if (h == target) {
@@ -244,7 +258,25 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
 
     if (triggerFor(L.special) == 1) swapSwitchTextures(*w.map, const_cast<line_t&>(L));
 
-    const int back = sideSector(*w.map, L, 1);
+    const int front = sideSector(*w.map, L, 0);
+    const int back  = sideSector(*w.map, L, 1);
+    // Manual doors: the door sector is the side OPPOSITE the activating player (maps may
+    // put the door on either sidedef). Remote/switch lines fall back to the tag.
+    int doorSec = back;
+    if (front >= 0 && back >= 0 && who &&
+        L.v1 >= 0 && L.v2 >= 0 &&
+        L.v1 < static_cast<int>(w.map->vertices.size()) &&
+        L.v2 < static_cast<int>(w.map->vertices.size())) {
+        const double ax = static_cast<double>(w.map->vertices[L.v1].x) / FRACUNIT;
+        const double ay = static_cast<double>(w.map->vertices[L.v1].y) / FRACUNIT;
+        const double bx = static_cast<double>(w.map->vertices[L.v2].x) / FRACUNIT;
+        const double by = static_cast<double>(w.map->vertices[L.v2].y) / FRACUNIT;
+        const double px = static_cast<double>(who->x) / FRACUNIT;
+        const double py = static_cast<double>(who->y) / FRACUNIT;
+        const double cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+        const bool onFront = cross < 0;          // front side = right of v1->v2
+        doorSec = onFront ? back : front;
+    }
     auto doorAt = [&](int sec, bool stay, int speed) {
         startDoor(w, sec, 150, stay, speed);
     };
@@ -252,7 +284,7 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     switch (L.special) {
     // ---- doors ----
     case 1: case 4: case 26: case 27: case 28: case 117: {
-        if (back >= 0) doorAt(back, false, L.special == 117 ? 4 : 2);
+        if (doorSec >= 0) doorAt(doorSec, false, L.special == 117 ? 4 : 2);
         else forTaggedSectors(*w.map, L.tag, [&](int s){ doorAt(s, false, 2); });
         break;
     }
@@ -261,7 +293,7 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
             const sector_t& s = w.map->sectors[sec];
             if (s.ceilingheight <= s.floorheight + 1) startDoor(w, sec, 0, true, 2);
         };
-        if (back >= 0) openStay(back);
+        if (doorSec >= 0) openStay(doorSec);
         else forTaggedSectors(*w.map, L.tag, openStay);
         break;
     }
@@ -270,7 +302,7 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
             if (w.map->sectors[sec].ceilingheight > w.map->sectors[sec].floorheight + 1)
                 startDoor(w, sec, 0, false, 2);
         };
-        if (back >= 0) closeAt(back);
+        if (doorSec >= 0) closeAt(doorSec);
         else forTaggedSectors(*w.map, L.tag, closeAt);
         break;
     }
@@ -280,12 +312,12 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
             if (s.ceilingheight <= s.floorheight + 1)
                 startDoor(w, sec, 0, true, L.special == 118 ? 4 : 2);
         };
-        if (back >= 0) openStay(back);
+        if (doorSec >= 0) openStay(doorSec);
         else forTaggedSectors(*w.map, L.tag, openStay);
         break;
     }
     case 90: {
-        if (back >= 0) doorAt(back, false, 2);
+        if (doorSec >= 0) doorAt(doorSec, false, 2);
         else forTaggedSectors(*w.map, L.tag, [&](int s){ doorAt(s, false, 2); });
         break;
     }
