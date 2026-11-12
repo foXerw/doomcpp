@@ -35,6 +35,7 @@ add_library(doomcore STATIC
     src/render/r_plane.cpp
     src/render/r_things.cpp
     src/render/r_bsp.cpp
+    src/ui/st_stuff.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 
