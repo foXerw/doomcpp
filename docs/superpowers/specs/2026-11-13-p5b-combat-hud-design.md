@@ -109,3 +109,27 @@ P5b 把「能走能扔桶」推进到「能打」：
 - 敌人 AI 仍静止（P6b）；命中静止敌人可致死。
 - 命中判定为几何等价简化，不逐 intercept 等价。
 - psprite 绘制按 vanilla 屏幕锚点/缩放实现，但不做完整 `R_DrawPSprite` 的遮挡/裁剪细节。
+
+## 8. 实现记录（2026-11-13 夜间实现）
+
+Task 0-9 已落地于 `feat/p5b-combat`（135/135 tests，`--smoketest` 通过，gapscan geometry 未回退）。
+实现期发现并修复的额外问题：
+
+- **`P_ZMovement` 天花板夹取会把物体压到地板以下**（`ceilingz` 未初始化时 `ceilingz-height < floorz`）→
+  运行时 spawn 的 thing（血花/puff/火箭/测试目标）会沉到 `-height`，导致命中检测全部落空。
+  修法：夹取下限不低于 `floorz`；`P_SpawnMobj` 从 spawn sector 初始化 floorz/ceilingz/z。
+- **`P_SetMobjState` 进入 `S_NULL` 必须移除对象**（vanilla）：puff/blood/爆炸状态链的终点。
+  保留单参版本仅供纯渲染缓存测试，游戏路径用 `World&` 版本。
+- **thinker pass 内删除**必须延迟（`removePending`），否则 `std::list` 迭代/其他 thinker 指针失效；
+  `P_BlockThingsIterator` 用 lookahead 迭代，允许回调移除当前对象。
+- **血包只改 `player.health` 不改 `mobj.health`** 会让伤害路径读到旧血量 → 拾取后回写 mobj。
+
+### 8.1 实现期接受的简化（P5b 内）
+- 切枪无 lower/raise 位移动画（状态机瞬时跳转；vanilla 的 psprite sy 缓动未做）。
+- 状态栏脸为静态：`STFST00`（健康）/`STFDEAD0`（死亡），无表情/受伤帧动画。
+- Freedoom 的 STBAR 第三格标签是 `FRAGS`；武器槽数字仍画在 vanilla `ARMS` 坐标 (111,172)。
+  （WAD 布局差异，非渲染 bug；后续可改为右侧 arms 面板图标。）
+- hitscan 无地板/天花板拦截与两段墙的上下墙分界（命中墙即 puff）；auto-aim 不检查墙遮挡。
+- BFG 简化为半径伤害（无 40 条 tracer）；powerup（无敌/狂暴/隐身/夜视）仍不生效。
+- 拾取无消息文本/拾取闪烁；E1M1 表内没有蓝甲/电池/背包（被拾取逻辑覆盖，但地图无该物品）。
+- psprite 按 1:1 绘制、fullbright；vanilla 的 psprite 光照/隐身 fuzz 未做。
