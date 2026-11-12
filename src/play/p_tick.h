@@ -32,3 +32,7 @@ void    P_SetupLevel(World& w, const MapData& m);   // spawn all THINGS + player
 void    P_BuildThingsBySubsec(World& w);            // rebuild per-frame render bins
 
 void    P_RunThinkers(World& w);                    // defined in Task 6 (physics)
+
+// P5a toss milestone, shared by the interactive G key and --smoketest: spawn an MT_BARREL
+// 48 units in front of the player with forward+up momentum. Returns the new barrel (or null).
+mobj_t* P_TossBarrel(World& w);

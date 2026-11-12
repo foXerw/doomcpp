@@ -14,6 +14,8 @@ constexpr int MAPBLOCK = 128;               // blockmap cell size in map units (
 constexpr int ML_BLOCKING      = 1;
 constexpr int ML_BLOCKMONSTERS = 2;
 constexpr int ML_TWOSIDED      = 4;
+constexpr int ML_DONTPEGTOP    = 8;   // upper/mid texture top is pegged to the front ceiling
+constexpr int ML_DONTPEGBOTTOM = 16;  // texture bottom is pegged to the floor
 
 struct vertex_t    { fixed_t x, y; };
 struct line_t      { int v1, v2, flags, special, tag; int sidenum[2]; mutable int validcount = 0; };

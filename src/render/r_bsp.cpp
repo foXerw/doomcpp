@@ -13,6 +13,7 @@
 
 namespace {
 constexpr uint32_t NF_SUBSECTOR = 0x8000;
+bool g_forceOpaque = false;          // diagnostics only (see R_SetForceOpaqueForDiagnostics)
 
 struct Cam {
     float px, py, sin, cos, eyeZ, focal;
@@ -45,7 +46,8 @@ int pointOnSide(float x, float y, const node_t& n) {
 // Draw one textured wall column over world-z span [zTop, zBot] (zTop>zBot) at screen column x.
 // solid: spans full opening (one-sided). upper/lower: ceiling/floor-step walls. Updates clips for opaque parts.
 void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffset,
-             int zTop, int zBot, int light, bool solid, bool upper, bool lower, float colDepth) {
+             float anchorZ, int zTop, int zBot, int light, bool solid, bool upper, bool lower,
+             float colDepth) {
     if (T.width <= 0 || T.height <= 0 || T.rgba.empty()) return;
     float syTop = c.h / 2.0f - c.focal * (zTop - c.eyeZ) * scale;   // smaller y (wall top)
     float syBot = c.h / 2.0f - c.focal * (zBot - c.eyeZ) * scale;   // larger y  (wall bottom)
@@ -54,11 +56,16 @@ void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffse
     float shade = std::clamp((light / 255.0f) * R_DistanceShade(colDepth), 0.0f, 1.0f);
     for (int y = yA; y <= yB; ++y) {
         float z = c.eyeZ + (c.h / 2.0f - y) / (c.focal * scale);     // invert projection -> world z
-        float V = (z - zTop) + rowoffset;                            // 1 map unit = 1 texel
+        // 1 map unit = 1 texel. V grows DOWNWARD from the texture's anchor height (anchorZ is the
+        // world z where texture V=0; vanilla r_segs.c texturemid selected by ML_DONTPEGTOP/BOTTOM).
+        float V = (anchorZ - z) + rowoffset;
         int vi = static_cast<int>(std::floor(V)); vi %= T.height; if (vi < 0) vi += T.height;
         int ui = static_cast<int>(std::floor(U));   ui %= T.width;  if (ui < 0) ui += T.width;
         uint32_t texel = T.rgba[static_cast<size_t>(vi) * T.width + ui];
-        if (!(texel & 0xFFu)) continue;                              // transparent
+        if (!(texel & 0xFFu)) {                                      // transparent (masked) texel
+            if (g_forceOpaque) c.fb[static_cast<size_t>(y) * c.w + x] = 0x000000FFu;   // diagnostics
+            continue;
+        }
         uint8_t r = static_cast<uint8_t>((texel >> 24 & 0xFF) * shade);
         uint8_t g = static_cast<uint8_t>((texel >> 16 & 0xFF) * shade);
         uint8_t b = static_cast<uint8_t>((texel >> 8  & 0xFF) * shade);
@@ -143,8 +150,11 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     if (!twoSided) {
         markCeil = markFloor = true;
     } else {
-        markCeil  = (cH_f >  cH_b) || (cH_f == cH_b && (ceilPicDiff  || light != lightB));
-        markFloor = (fH_f <  fH_b) || (fH_f == fH_b && (floorPicDiff || light != lightB));
+        // vanilla r_segs.c:537-560: a plane is marked whenever the two sectors' heights DIFFER
+        // (either direction) or their flat/light differ. The visible side's plane must be marked
+        // at every height step so it closes against the boundary (P3.5d).
+        markCeil  = (cH_f != cH_b) || ceilPicDiff  || (light != lightB);
+        markFloor = (fH_f != fH_b) || floorPicDiff || (light != lightB);
         if (cH_b <= fH_f || fH_b >= cH_f) { markCeil = markFloor = true; }  // closed door
     }
     if (fH_f >= static_cast<int>(c.eyeZ) && !skyFloorF) markFloor = false;  // floor above view (sky always)
@@ -184,8 +194,10 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
             // down to the HORIZON (where the floor begins), not down to the projected nominal
             // ceiling. For a high/outdoor sky the nominal ceiling (yCeilF) projects off the
             // top of the screen, so using it left a black band between sky and floor. P3d fix.
-            int bot = skyCeilF ? (static_cast<int>(std::floor(yFloorF)) - 1)
-                               : (static_cast<int>(std::floor(yCeilF)) - 1);
+            // Non-sky: the wall top row is ceil(yCeilF) (drawCol), so the plane band must end at
+            // ceil(yCeilF)-1 to stay contiguous (floor() left a 1-px seam when fractional).
+            int bot = skyCeilF ? static_cast<int>(std::floor(yFloorF))
+                               : (static_cast<int>(std::ceil(yCeilF)) - 1);
             if (bot >= fc) bot = fc - 1;
             if (top <= bot) { c.vps[ceilPlane].top[x] = top; c.vps[ceilPlane].bottom[x] = bot; }
         }
@@ -197,16 +209,37 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         }
 
         if (!twoSided) {
-            if (midT) drawCol(c, x, scale, *midT, U, sd.rowoffset, cH_f, fH_f, light, /*solid*/true, false, false, depth);
+            // vanilla: top of texture at ceiling, unless DONTPEGBOTTOM (bottom at floor).
+            if (midT) {
+                float anchor = (L.flags & ML_DONTPEGBOTTOM) ? static_cast<float>(fH_f) + midT->height
+                                                            : static_cast<float>(cH_f);
+                drawCol(c, x, scale, *midT, U, sd.rowoffset, anchor, cH_f, fH_f, light, /*solid*/true, false, false, depth);
+            }
         } else {
-            // upper wall (ceiling step): back ceiling higher than front
-            if (topT && cH_b > cH_f) drawCol(c, x, scale, *topT, U, sd.rowoffset, cH_b, cH_f, light, false, /*upper*/true, false, depth);
+            // upper wall (ceiling step): vanilla r_segs.c:570 draws toptexture when
+            // worldhigh < worldtop -- i.e. back ceiling LOWER than front.
+            // Pegging: DONTPEGTOP -> top at front ceiling; else bottom at back ceiling.
+            if (topT && cH_b < cH_f) {
+                float anchor = (L.flags & ML_DONTPEGTOP) ? static_cast<float>(cH_f)
+                                                         : static_cast<float>(cH_b) + topT->height;
+                drawCol(c, x, scale, *topT, U, sd.rowoffset, anchor, cH_f, cH_b, light, false, /*upper*/true, false, depth);
+            }
             // lower wall (floor step): vanilla r_segs.c:589 draws bottomtexture when back floor
             // is HIGHER than front (worldlow>worldbottom) -- the riser of a floor step-UP.
             // (Old fH_b<fH_f was inverted -> missed the pit step-up riser -> HOM gap.)
-            if (botT && fH_b > fH_f) drawCol(c, x, scale, *botT, U, sd.rowoffset, fH_b, fH_f, light, false, false, /*lower*/true, depth);
-            // masked middle (fences/grates): floats in the back opening; transparent pixels see through; no clip update
-            if (midT && cH_b > fH_b) drawCol(c, x, scale, *midT, U, sd.rowoffset, cH_b, fH_b, light, false, false, false, depth);
+            // Pegging: default top at back floor; DONTPEGBOTTOM anchors at front ceiling (vanilla).
+            if (botT && fH_b > fH_f) {
+                float anchor = (L.flags & ML_DONTPEGBOTTOM) ? static_cast<float>(cH_f)
+                                                           : static_cast<float>(fH_b);
+                drawCol(c, x, scale, *botT, U, sd.rowoffset, anchor, fH_b, fH_f, light, false, false, /*lower*/true, depth);
+            }
+            // masked middle (fences/grates): floats in the back opening; transparent pixels see through; no clip update.
+            // Same one-sided-mid pegging as vanilla's masked draw (default top at ceiling, else bottom at floor).
+            if (midT && cH_b > fH_b) {
+                float anchor = (L.flags & ML_DONTPEGBOTTOM) ? static_cast<float>(fH_f) + midT->height
+                                                            : static_cast<float>(cH_f);
+                drawCol(c, x, scale, *midT, U, sd.rowoffset, anchor, cH_b, fH_b, light, false, false, false, depth);
+            }
         }
     }
 }
@@ -241,11 +274,14 @@ void renderNode(Cam& c, const MapData& m, uint32_t idx) {
 }
 }  // namespace
 
+void R_SetForceOpaqueForDiagnostics(bool on) { g_forceOpaque = on; }
+
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
                   const TextureLookup& tex, float px, float py, float ang,
                   float eyeZ, uint32_t animTick,
                   const SpriteCache* sprites,
-                  const std::vector<std::vector<const mobj_t*>>* thingsBySubsec) {
+                  const std::vector<std::vector<const mobj_t*>>* thingsBySubsec,
+                  uint32_t clearColor) {
     if (map.nodes.empty() || map.subsectors.empty()) return;
     Cam c;
     c.px = px; c.py = py; c.eyeZ = eyeZ;
@@ -262,7 +298,7 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     c.vps.clear();
     c.vissprites.clear();
     c.sprites = sprites; c.thingsBySubsec = thingsBySubsec;
-    for (int i = 0; i < w * h; ++i) fb[i] = 0x000000FFu;            // opaque black clear
+    for (int i = 0; i < w * h; ++i) fb[i] = clearColor;             // opaque black by default
     renderNode(c, map, static_cast<uint32_t>(map.nodes.size() - 1));
     R_DrawPlanes(c.plane, c.vps);
     // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after visplanes.
