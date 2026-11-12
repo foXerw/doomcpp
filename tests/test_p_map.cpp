@@ -28,7 +28,8 @@ static TestMap buildTestMap(bool oneSided, int backFloor) {
     return tm;
 }
 static mobj_t playerMobj(fixed_t x, fixed_t y) {
-    mobj_t mo; mo.info = &mobjinfo[MT_PLAYER]; mo.x=x; mo.y=y; mo.floorz=0;
+    mobj_t mo; mo.info = &mobjinfo[MT_PLAYER]; mo.flags = mobjinfo[MT_PLAYER].flags;
+    mo.x=x; mo.y=y; mo.floorz=0;
     return mo;
 }
 }

@@ -1,5 +1,8 @@
 #include "doctest.h"
 #include "play/p_tick.h"
+#include "play/p_maputl.h"
+#include "play/p_setup.h"
+#include "play/p_tick.h"
 #include "play/p_mobj.h"
 #include "play/p_setup.h"
 #include "play/p_maputl.h"
@@ -80,4 +83,25 @@ TEST_CASE("P_BuildThingsBySubsec bins mobjs by subsector, skips player.mo") {
     }
     CHECK(counted == 2);
     CHECK(sawPlayer == false);
+}
+
+TEST_CASE("P_CheckSecrets counts a secret sector once") {
+    MapData m;
+    sector_t s; s.floorheight = 0; s.ceilingheight = 128; s.special = 9;
+    m.sectors.push_back(s);
+    seg_t g; g.linedef = -1; g.side = 0; g.frontsector = 0; g.backsector = -1;
+    m.segs.push_back(g);
+    subsector_t ss; ss.segcount = 1; ss.firstseg = 0; m.subsectors.push_back(ss);
+
+    World w; w.map = &m; w.bm = &m.blockmap;
+    mobj_t mo; mo.subsector = 0; mo.info = &mobjinfo[MT_PLAYER];
+    w.player.mo = &mo;
+    w.secretFound.assign(1, 0);
+    w.totalSecrets = 1;
+
+    P_CheckSecrets(w, mo);
+    CHECK(w.player.secretsFound == 1);
+    CHECK(w.secretFound[0] == 1);
+    P_CheckSecrets(w, mo);                 // second visit must not double-count
+    CHECK(w.player.secretsFound == 1);
 }

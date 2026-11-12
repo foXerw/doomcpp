@@ -4,6 +4,7 @@
 #include "play/info.h"
 #include <cstddef>
 #include <list>
+#include <string>
 #include <vector>
 
 struct MapData;
@@ -51,6 +52,7 @@ struct player_t {
     int      damagecount = 0;           // HUD face/tint timers
     int      bonuscount = 0;
     int      killcount = 0, itemcount = 0;
+    int      secretsFound = 0;          // P7: counted once per secret sector
     int      keys = 0;                  // bit0 blue, bit1 yellow, bit2 red
     bool     dead = false;
 };
@@ -64,6 +66,15 @@ struct World {
     bool                        thinkering = false;   // P_RemoveMobj defers unlinking during a pass
     std::vector<Mover>          movers;               // P6a active sector movers
     std::vector<std::vector<const mobj_t*>> thingsBySubsec;
+
+    // ---- P7 campaign state ----
+    std::string                 mapName;               // e.g. "E1M1"
+    int                         totalKills = 0;        // MF_COUNTKILL spawned
+    int                         totalItems = 0;        // MF_SPECIAL spawned
+    bool                        levelExitRequested = false;
+    bool                        secretExit = false;
+    int                         totalSecrets = 0;      // sectors with special 9
+    std::vector<char>           secretFound;           // per-sector, one-time count
 };
 
 mobj_t* P_SpawnMobj(World& w, fixed_t x, fixed_t y, fixed_t z, mobjtype_t type);
@@ -74,10 +85,15 @@ void    P_SetMobjState(World& w, mobj_t& m, statenum_t st);
 void    P_RemoveMobj(World& w, mobj_t& m);
 void    P_SetThingPosition(World& w, mobj_t& m);   // set m.subsector from (x,y)
 
-void    P_SetupLevel(World& w, const MapData& m);   // spawn all THINGS + player
+// Spawn all THINGS + player. When `carry` is non-null the player's inventory
+// (health/armor/ammo/weapons/keys/ready weapon) survives the level change (P7).
+void    P_SetupLevel(World& w, const MapData& m, const player_t* carry = nullptr);
 void    P_BuildThingsBySubsec(World& w);            // rebuild per-frame render bins
 
 void    P_RunThinkers(World& w);                    // defined in Task 6 (physics)
+
+// P7: count a secret sector the first time the player stands in it.
+void    P_CheckSecrets(World& w, mobj_t& mo);
 
 // P5b: per-tic player logic (weapon timers/psprites; `attack` = fire held, `weaponSwitch`
 // = requested weapontype or -1). Implemented in p_user.cpp; SDL-free.

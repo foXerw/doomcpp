@@ -12,6 +12,11 @@ add_executable(doomcpp_tests
     test_p_mobj.cpp
     test_p_tick.cpp
     test_p_attack.cpp
+    test_p_enemy.cpp
+    test_g_game.cpp
+    test_g_save.cpp
+    test_sfx.cpp
+    test_midi.cpp
     test_p_pspr.cpp
     test_p_spec.cpp
     test_r_draw.cpp

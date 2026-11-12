@@ -14,6 +14,7 @@ struct mobj_t {
     fixed_t floorz = 0, ceilingz = 0, dropoffz = 0;
     int     health = 0;
     int     flags = 0;
+    int     reactiontime = 0;               // P6b: A_Chase attack delay (ticks)
     int     tics = -1;                      // 当前 state 剩余 tic
     const mobjinfo_t* info = nullptr;
     const state_t*   state = nullptr;
@@ -29,3 +30,5 @@ struct mobj_t {
 struct World;   // fwd（p_tick.h 完整定义；避免 p_mobj.h -> p_tick.h 循环 include）
 // per-tic mobj thinker（动量/摩擦/重力/状态推进；P5b 可在其中 spawn/remove）。
 void P_MobjThinker(World& w, mobj_t& mo);
+// Momentum integration + friction (vanilla P_XYMovement); shared by mobjs and the player.
+void P_XYMovement(World& w, mobj_t& mo);

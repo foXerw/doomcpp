@@ -153,6 +153,7 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
     out.gzt = static_cast<float>(t.z >> FRACBITS) + static_cast<float>(v.patch->topoffset);
     out.patch = v.patch;
     out.flip = v.flip;
+    out.fuzz = (t.flags & MF_SHADOW) != 0;   // P7: spectres
     out.light = t.fullbright ? 255 : t.light;
     return true;
 }
@@ -163,14 +164,13 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
 // moving down the screen (y increasing) decreases worldZ, so imgRow = gzt - worldZ
 // grows downward (screen-down == image-down). Shading/byte-order mirror drawCol.
 //
-// Occlusion: wallDepth[x] is the nearest opaque wall's depth at column x (inf if none).
-// If wallDepth[x] <= vis.depth, a nearer-or-equal wall fully hides the sprite at x (skip);
-// otherwise the sprite is the nearer surface and overdraws wall/plane pixels within its
-// own [syTop,syBot] screen extent. Masked-middle walls (fences) are not recorded in
-// wallDepth, so sprites behind a fence show through (matches vanilla).
+// Occlusion: depthBuffer[y*w+x] is the nearest opaque wall's depth at that pixel (inf if
+// none). If it is <= vis.depth the wall pixel hides just that sprite pixel; the sprite
+// overdraws wall/plane pixels within its own [syTop,syBot] extent elsewhere. Only opaque
+// texels write depth, so sprites behind a fence/grating show through its holes.
 void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
                      float eyeZ, float focal,
-                     const std::vector<float>& wallDepth) {
+                     const std::vector<float>& depthBuffer) {
     if (!vis.patch || vis.patch->width <= 0 || vis.patch->height <= 0) return;
     if (vis.x1 > vis.x2) return;
     float ppe = focal * vis.scale;                       // pixels per texel
@@ -182,7 +182,7 @@ void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
     int yB = std::min(h - 1, static_cast<int>(std::floor(syBot)));
     for (int x = vis.x1; x <= vis.x2; ++x) {
         if (x < 0 || x >= w) continue;
-        if (wallDepth[x] <= vis.depth) continue;                     // nearer/equal opaque wall occludes column
+        const bool colOccluded = depthBuffer.size() == static_cast<size_t>(w) * h;
         float tc = (static_cast<float>(x) - vis.xTrueLeft) / ppe;
         if (vis.flip) tc = (vis.patch->width - 1) - tc;              // mirror texel column
         int col = static_cast<int>(std::floor(tc));
@@ -191,14 +191,21 @@ void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
             float worldZ = eyeZ + (h / 2.0f - y) / (focal * vis.scale);  // inverse project screen row -> world z
             int row = static_cast<int>(std::floor(vis.gzt - worldZ));    // screen-down == image-down
             if (row < 0 || row >= vis.patch->height) continue;
+            if (colOccluded &&
+                depthBuffer[static_cast<size_t>(y) * w + x] <= vis.depth) continue;  // wall pixel in front
             uint32_t texel = vis.patch->rgba[static_cast<size_t>(row) * vis.patch->width + col];
             if (!(texel & 0xFFu)) continue;                            // transparent (alpha==0) -> skip
             uint8_t r = static_cast<uint8_t>((texel >> 24 & 0xFF) * shade);
             uint8_t g = static_cast<uint8_t>((texel >> 16 & 0xFF) * shade);
             uint8_t b = static_cast<uint8_t>((texel >> 8  & 0xFF) * shade);
-            fb[static_cast<size_t>(y) * w + x] =
-                (static_cast<uint32_t>(r) << 24) | (static_cast<uint32_t>(g) << 16) |
-                (static_cast<uint32_t>(b) << 8) | 0xFFu;
+            uint32_t& dst = fb[static_cast<size_t>(y) * w + x];
+            if (vis.fuzz) {                       // spectre fuzz: 50/50 blend
+                r = static_cast<uint8_t>((r + (dst >> 24 & 0xFF)) >> 1);
+                g = static_cast<uint8_t>((g + (dst >> 16 & 0xFF)) >> 1);
+                b = static_cast<uint8_t>((b + (dst >> 8  & 0xFF)) >> 1);
+            }
+            dst = (static_cast<uint32_t>(r) << 24) | (static_cast<uint32_t>(g) << 16) |
+                  (static_cast<uint32_t>(b) << 8) | 0xFFu;
         }
     }
 }

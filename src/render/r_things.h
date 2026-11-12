@@ -54,6 +54,7 @@ struct vissprite_t {
     float gzt = 0;               // world-z of image TOP = z + topoffset
     const Patch* patch = nullptr;
     bool  flip = false;
+    bool  fuzz = false;          // MF_SHADOW (spectre): blend 50% with the framebuffer
     int   light = 160;           // 0..255 (255 if fullbright)
 };
 // Project a thing to a vissprite using the renderer's float basis
@@ -65,15 +66,14 @@ bool R_ProjectSprite(vissprite_t& out, const mobj_t& t, const SpriteCache& sprit
 
 // ---- R_DrawVisSprite (Task 8) ----
 // Per-screen-column masked draw of one vissprite. For each column in [vis.x1, vis.x2]:
-// if wallDepth[x] <= vis.depth a nearer-or-equal opaque wall fully occludes this column
-// (skip); otherwise the sprite is the nearer surface and draws its own [syTop,syBot]
-// extent (clamped to screen) over wall/plane pixels. Maps each screen column to a sprite
-// texel column (mirrored if vis.flip), inverse-projects the row to world-z -> patch row,
-// skips transparent texels (alpha==0), distance-shades, and writes RGBA.
-// Shading/byte-order mirror drawCol in r_bsp.cpp exactly.
+// depthBuffer is per-pixel (size w*h, indexed y*w+x): a nearer-or-equal opaque wall
+// pixel (>=0) skips that one sprite pixel, so low steps/windows only occlude what they
+// actually cover. Maps each screen column to a sprite texel column (mirrored if
+// vis.flip), inverse-projects the row to world-z -> patch row, skips transparent texels
+// (alpha==0), distance-shades, and writes RGBA. Shading/byte-order mirror drawCol.
 void R_DrawVisSprite(uint32_t* fb, int w, int h, const vissprite_t& vis,
                      float eyeZ, float focal,
-                     const std::vector<float>& wallDepth);
+                     const std::vector<float>& depthBuffer);
 
 // P5b first-person weapon/flash sprite (vanilla R_DrawPSprite subset, 1:1 scale):
 // x = center + sx - patch.leftoffset, y = h/2 - 100 + sy - patch.topoffset (vanilla

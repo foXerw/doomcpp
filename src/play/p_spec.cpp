@@ -3,6 +3,8 @@
 #include "p_maputl.h"
 #include "info.h"
 #include "core/m_tables.h"
+#include "core/i_system.h"
+#include "play/sfx.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -99,6 +101,7 @@ void startDoor(World& w, int sec, int waitTics, bool stayOpen, int speed) {
     mv->waitTics = waitTics; mv->stayOpen = stayOpen;
     // Open if currently closed, close if already open (manual doors toggle).
     mv->state = (s.ceilingheight > bottom + 1) ? 2 : 0;
+    I_StartSound(mv->state == 0 ? SFX_DOROPN : SFX_DORCLS);
 }
 
 void startPlat(World& w, int sec, int speed, int waitTics) {
@@ -112,6 +115,7 @@ void startPlat(World& w, int sec, int speed, int waitTics) {
     mv->kind = MoverKind::Plat; mv->sector = sec;
     mv->top = top; mv->bottom = bottom; mv->speed = speed;
     mv->waitTics = waitTics; mv->stayOpen = false; mv->state = 0;
+    I_StartSound(SFX_STNMOV);
 }
 
 void startFloorOrCeiling(World& w, int sec, MoverKind kind, int target, int speed) {
@@ -121,6 +125,9 @@ void startFloorOrCeiling(World& w, int sec, MoverKind kind, int target, int spee
     mv->kind = kind; mv->sector = sec;
     mv->top = target; mv->bottom = target; mv->speed = speed;
     mv->waitTics = 0; mv->stayOpen = true; mv->state = 0;
+    if (target != w.map->sectors[sec].floorheight ||
+        kind == MoverKind::Ceiling)
+        I_StartSound(SFX_STNMOV);
 }
 
 template <typename Fn>
@@ -150,7 +157,7 @@ int triggerFor(int special) {
     case 101: case 102: case 41:
         return 1;
     case 2: case 3: case 4: case 7: case 8: case 19: case 38:
-    case 39: case 40: case 43: case 44: case 52:
+    case 39: case 40: case 43: case 44: case 52: case 124:
     case 58: case 82: case 88: case 92: case 97:
     case 100: case 119: case 120: case 127: case 130: case 131:
         return 2;
@@ -159,7 +166,7 @@ int triggerFor(int special) {
     }
 }
 
-void swapSwitchTextures(MapData& m, const line_t& L) {
+bool swapSwitchTextures(MapData& m, const line_t& L) {
     auto swap = [](char* name) {
         if (name && std::strncmp(name, "SW1", 3) == 0) name[2] = '2';
     };
@@ -171,8 +178,9 @@ void swapSwitchTextures(MapData& m, const line_t& L) {
                          std::strncmp(sd.bottomtexture, "SW1", 3) == 0;
         if (!hadSwitch) continue;
         swap(sd.toptexture); swap(sd.midtexture); swap(sd.bottomtexture);
-        return;   // only the first matching side
+        return true;   // only the first matching side
     }
+    return false;
 }
 
 bool teleportPlayer(World& w, mobj_t& mo, int tag) {
@@ -190,6 +198,7 @@ bool teleportPlayer(World& w, mobj_t& mo, int tag) {
         mo.floorz   = static_cast<fixed_t>(w.map->sectors[sec].floorheight)   << FRACBITS;
         mo.ceilingz = static_cast<fixed_t>(w.map->sectors[sec].ceilingheight) << FRACBITS;
         mo.z = mo.floorz;
+        I_StartSound(SFX_TELEPT);
         return true;
     }
     return false;
@@ -205,6 +214,13 @@ int P_DoorOpenHeight(const MapData& m, int sec) {
 bool P_SectorHasMover(const World& w, int sector) {
     for (const Mover& mv : w.movers) if (mv.sector == sector && mv.state != 3) return true;
     return false;
+}
+
+void P_LowerFloorByTag(World& w, int tag) {
+    if (!w.map || tag <= 0) return;
+    forTaggedSectors(*w.map, tag, [&](int s) {
+        startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorDown(*w.map, s), 4);
+    });
 }
 
 void P_RunMovers(World& w) {
@@ -254,9 +270,13 @@ void P_RunMovers(World& w) {
 void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     if (!w.map) return;
     const int key = keyForSpecial(L.special);
-    if (key && who == w.player.mo && !(w.player.keys & key)) return;   // locked
+    if (key && who == w.player.mo && !(w.player.keys & key)) {
+        I_StartSound(SFX_NOWAY);
+        return;   // locked
+    }
 
-    if (triggerFor(L.special) == 1) swapSwitchTextures(*w.map, const_cast<line_t&>(L));
+    if (triggerFor(L.special) == 1 && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
+        I_StartSound(SFX_SWTCHN);
 
     const int front = sideSector(*w.map, L, 0);
     const int back  = sideSector(*w.map, L, 1);
@@ -373,8 +393,15 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     case 39: case 97:
         if (who) teleportPlayer(w, *who, L.tag);
         break;
-    case 11: case 51: case 52:
-        break;   // level exit: P7
+    // ---- level exits (P7 campaign flow) ----
+    case 11: case 52:
+        w.levelExitRequested = true;
+        w.secretExit = false;
+        break;
+    case 51: case 124:
+        w.levelExitRequested = true;
+        w.secretExit = true;
+        break;
     default:
         break;
     }
@@ -382,7 +409,11 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
 
 void P_UseLines(World& w, player_t& p) {
     if (!w.map || !p.mo || p.dead) return;
-    mobj_t& mo = *p.mo;
+    P_UseLines(w, *p.mo);
+}
+
+void P_UseLines(World& w, mobj_t& mo) {
+    if (!w.map) return;
     const int fi = static_cast<int>((mo.angle >> ANGLETOFINESHIFT) & FINEMASK);
     const double ox = static_cast<double>(mo.x) / FRACUNIT;
     const double oy = static_cast<double>(mo.y) / FRACUNIT;
