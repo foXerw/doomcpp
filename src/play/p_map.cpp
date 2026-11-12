@@ -356,6 +356,7 @@ void P_TouchSpecialThings(World& w, mobj_t& mo) {
             if (touchSpecialThing(w, th)) {
                 ++w.player.itemcount;
                 w.player.bonuscount = 6;
+                if (w.player.mo) w.player.mo->health = w.player.health;   // keep the mobj in sync
                 P_RemoveMobj(w, th);
             }
             return false;
@@ -416,6 +417,7 @@ void P_CalcHeight(const MapData& m, player_t& p) {
 void P_MovePlayer(const MapData& m, const Blockmap& bm, player_t& p,
                   fixed_t forward, fixed_t strafe, angle_t turn) {
     mobj_t* mo = p.mo;
+    if (!mo || p.dead) return;   // corpses don't walk
     mo->angle += turn;   // uint32 modular wraparound
     int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
     fixed_t fc = finecosine[fi];   // forward = (cos, sin) = vanilla

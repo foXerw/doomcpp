@@ -185,6 +185,17 @@ TEST_CASE("P_DamageMobj: player death marks player dead and drops the weapon") {
     CHECK(w.player.psprites[0].state == &states[S_NULL]);
 }
 
+TEST_CASE("P_MovePlayer refuses to move a dead player") {
+    MapData m = openMap();
+    World w; w.map = &m; w.bm = &m.blockmap;
+    addPlayer(w, m);
+    w.player.dead = true;
+    w.player.health = 0;
+    fixed_t x0 = w.player.mo->x;
+    P_MovePlayer(m, m.blockmap, w.player, 5 << FRACBITS, 0, 0);
+    CHECK(w.player.mo->x == x0);
+}
+
 TEST_CASE("P_DamageMobj ignores non-shootable things") {
     MapData m = openMap();
     World w; w.map = &m; w.bm = &m.blockmap;

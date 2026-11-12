@@ -10,7 +10,7 @@ void P_PlayerThink(World& w, bool attack, int weaponSwitch) {
     if (p.damagecount > 0) --p.damagecount;
     if (p.bonuscount  > 0) --p.bonuscount;
 
-    if (p.dead || p.health <= 0) return;   // no weapon handling while dead
+    if (p.dead) return;   // no weapon handling while dead
 
     if (weaponSwitch >= 0 && weaponSwitch < NUMWEAPONS &&
         (p.weapons & (1u << weaponSwitch)) && weaponSwitch != p.readyweapon) {

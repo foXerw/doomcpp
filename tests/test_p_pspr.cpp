@@ -144,6 +144,7 @@ TEST_CASE("Pickup: stimpack and green armor update the player") {
     P_SpawnMobj(w, 0, 0, 0, MT_D2011);                   // stimpack +10
     P_TouchSpecialThings(w, *w.player.mo);
     CHECK(w.player.health == 100);
+    CHECK(w.player.mo->health == 100);                   // mobj health mirrored (damage path)
     P_SpawnMobj(w, 0, 0, 0, MT_D2018);                   // green armor
     P_TouchSpecialThings(w, *w.player.mo);
     CHECK(w.player.armorpoints[0] == 100);

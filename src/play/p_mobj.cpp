@@ -95,6 +95,7 @@ void P_MobjThinker(World& w, mobj_t& mo) {
                 if (&th == &mo || &th == mo.target) return false;
                 if (th.health <= 0 || !(th.flags & MF_SHOOTABLE)) return false;
                 fixed_t tr = th.info ? th.info->radius : 0;
+                if (mo.z > th.z + th.height || mo.z + mo.height < th.z) return false;   // vertical miss
                 if (std::abs(th.x - mo.x) <= tr + r && std::abs(th.y - mo.y) <= tr + r) {
                     touched = &th;
                     return true;
