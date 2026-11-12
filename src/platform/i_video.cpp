@@ -91,6 +91,10 @@ bool pollEvents(Input& input) {
         if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_G &&
             ev.key.repeat == 0)
             input.spawn = true;
+        // P6a use key (doors/switches): Space, edge-triggered.
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_SPACE &&
+            ev.key.repeat == 0)
+            input.use = true;
         // P5b weapon slots: 1-8 -> fist/chainsaw/pistol/shotgun/chaingun/rocket/plasma/bfg.
         if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
             ev.key.keysym.scancode >= SDL_SCANCODE_1 && ev.key.keysym.scancode <= SDL_SCANCODE_8) {

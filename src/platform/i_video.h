@@ -9,6 +9,7 @@ struct Input {
     bool strafeLeft=false, strafeRight=false;
     bool spawn=false;       // P5a: edge-triggered (set on G KEYDOWN w/ repeat==0)
     bool fire=false;        // P5b: held Ctrl fires the ready weapon
+    bool use=false;         // P6a: edge-triggered Space opens doors/uses switches
     int  weaponSwitch=-1;   // P5b: edge-triggered weapon slot (1..8 -> weapontype or -1)
 };
 
