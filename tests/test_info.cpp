@@ -52,3 +52,60 @@ TEST_CASE("MT_BARREL is solid + has gravity (no NOGRAVITY)") {
     CHECK(mobjinfo[MT_BARREL].radius > 0);
     CHECK(mobjinfo[MT_BARREL].height > 0);
 }
+
+// ---- P5b tables ----
+
+TEST_CASE("P5b: weapon psprite state chains carry actions") {
+    CHECK(states[S_PISTOL].action == A_WeaponReady);
+    CHECK(states[S_PISTOL2].action == A_FirePistol);
+    CHECK(states[S_PISTOL2].nextstate == S_PISTOL3);
+    CHECK(std::string(sprnames[states[S_PISTOL2].sprite]) == "PISG");
+    CHECK(states[S_PISTOLFLASH].action == A_Light1);
+    CHECK(states[S_SGUN2].action == A_FireShotgun);
+    CHECK(states[S_CHAIN2].action == A_FireCGun);
+    CHECK(states[S_MISSILE2].action == A_FireMissile);
+    CHECK(states[S_SAW].action == A_WeaponReady);
+}
+
+TEST_CASE("P5b: weaponinfo/ammoinfo match vanilla") {
+    CHECK(weaponinfo[WP_PISTOL].ammo == AM_CLIP);
+    CHECK(weaponinfo[WP_PISTOL].readystate == S_PISTOL);
+    CHECK(weaponinfo[WP_PISTOL].atkstate == S_PISTOL1);
+    CHECK(weaponinfo[WP_SHOTGUN].ammo == AM_SHELL);
+    CHECK(weaponinfo[WP_MISSILE].ammo == AM_MISL);
+    CHECK(weaponinfo[WP_PLASMA].ammo == AM_CELL);
+    CHECK(weaponinfo[WP_FIST].ammo == AM_NOAMMO);
+    CHECK(ammoinfo[AM_CLIP].maxammo == 200);
+    CHECK(ammoinfo[AM_SHELL].maxammo == 50);
+    CHECK(ammoinfo[AM_CELL].maxammo == 300);
+    CHECK(ammoinfo[AM_MISL].maxammo == 50);
+}
+
+TEST_CASE("P5b: monsters have pain/death state fields") {
+    CHECK(mobjinfo[MT_POSSESSED].painstate == S_POSS_PAIN);
+    CHECK(mobjinfo[MT_POSSESSED].deathstate == S_POSS_DIE1);
+    CHECK(mobjinfo[MT_POSSESSED].painchance == 200);
+    CHECK(mobjinfo[MT_SHOTGUY].deathstate == S_SPOS_DIE1);
+    CHECK(mobjinfo[MT_TROOP].xdeathstate == S_TROO_XDIE1);
+    CHECK(mobjinfo[MT_SERGEANT].deathstate == S_SARG_DIE1);
+    CHECK(mobjinfo[MT_PLAYER].deathstate == S_PLAY_DIE1);
+    CHECK(mobjinfo[MT_PLAYER].painchance == 255);
+}
+
+TEST_CASE("P5b: projectile/effect mobj types") {
+    CHECK((mobjinfo[MT_ROCKET].flags & MF_MISSILE) != 0);
+    CHECK(mobjinfo[MT_ROCKET].deathstate == S_EXPLODE1);
+    CHECK(mobjinfo[MT_ROCKET].damage == 20);
+    CHECK(mobjinfo[MT_PLASMA].spawnstate == S_PLASBALL);
+    CHECK(mobjinfo[MT_BFG].damage == 100);
+    CHECK(mobjinfo[MT_PUFF].spawnstate == S_PUFF1);
+    CHECK(mobjinfo[MT_BLOOD].spawnstate == S_BLOOD1);
+    CHECK((mobjinfo[MT_PUFF].flags & MF_NOGRAVITY) != 0);
+}
+
+TEST_CASE("P5b: new sprite names are bound") {
+    CHECK(std::string(sprnames[SPR_PISG]) == "PISG");
+    CHECK(std::string(sprnames[SPR_PUNG]) == "PUNG");
+    CHECK(std::string(sprnames[SPR_PUFF]) == "PUFF");
+    CHECK(std::string(sprnames[SPR_MISL]) == "MISL");
+}
