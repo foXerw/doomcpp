@@ -19,10 +19,22 @@ constexpr int     MAPBLOCKSHIFT = FRACBITS + 7;    // MAPBLOCK = 128 = 2^7
 constexpr fixed_t MISSILERANGE = 32 * 64 << FRACBITS;   // vanilla p_local.h
 constexpr fixed_t MELEERANGE   = 64 << FRACBITS;        // vanilla p_local.h
 
-struct PosCheck { fixed_t floorz = 0, ceilingz = 0, dropoffz = 0; bool ok = true; };
+struct PosCheck {
+    fixed_t floorz = 0, ceilingz = 0, dropoffz = 0;
+    bool ok = true;
+    int  blockedLine = -1;   // P6a: line that stopped/limited the move (for P_SlideMove)
+};
 
 PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, const mobj_t& mo, fixed_t x, fixed_t y);
 bool     P_TryMove(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t nx, fixed_t ny);
+
+// P6a World-aware variants: also block against solid mobjs (thing↔thing) and expose the
+// blocking line. P_SlideMove projects the move along the blocking line (up to 3 passes).
+PosCheck P_CheckPosition(World& w, const mobj_t& mo, fixed_t x, fixed_t y);
+bool     P_TryMove(World& w, mobj_t& mo, fixed_t nx, fixed_t ny);
+bool     P_SlideMove(World& w, mobj_t& mo, fixed_t dx, fixed_t dy);
+// Player movement for the game loop: slide against walls/things, fire walk triggers.
+void     P_MovePlayerWorld(World& w, player_t& p, fixed_t forward, fixed_t strafe, angle_t turn);
 bool     P_TrySlide(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t dx, fixed_t dy);
 void     P_CalcHeight(const MapData& m, player_t& p);
 void     P_MovePlayer(const MapData& m, const Blockmap& bm, player_t& p,

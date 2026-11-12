@@ -11,6 +11,19 @@ struct Blockmap;
 
 constexpr int KEY_BLUE = 1, KEY_YELLOW = 2, KEY_RED = 4;
 
+// P6a sector movers (doors/lifts/floors/ceilings) live in the World tick.
+enum class MoverKind { Door, Plat, Floor, Ceiling };
+struct Mover {
+    MoverKind kind = MoverKind::Door;
+    int  sector = -1;
+    int  top = 0;         // target height for state 0
+    int  bottom = 0;      // target height for state 2 (doors/plats)
+    int  speed = 2;       // map units per tic
+    int  waitTics = 0;
+    int  state = 0;       // 0 -> top, 1 waiting, 2 -> bottom, 3 done
+    bool stayOpen = false;
+};
+
 // First-person weapon/flash sprite state (vanilla pspdef_t). sx/sy are screen offsets in
 // 16.16 map units; P5b keeps them at 0 (the WAD's weapon sprites are pre-offset).
 struct pspdef_t {
@@ -43,12 +56,13 @@ struct player_t {
 };
 
 struct World {
-    const MapData*              map = nullptr;
+    MapData*                    map = nullptr;   // P6a: sector movers mutate heights
     const Blockmap*             bm  = nullptr;
     std::list<mobj_t>           mobjs;
     player_t                    player;
     std::uint32_t               tic = 0;
     bool                        thinkering = false;   // P_RemoveMobj defers unlinking during a pass
+    std::vector<Mover>          movers;               // P6a active sector movers
     std::vector<std::vector<const mobj_t*>> thingsBySubsec;
 };
 

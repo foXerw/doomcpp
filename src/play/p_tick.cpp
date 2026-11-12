@@ -1,6 +1,7 @@
 #include "p_tick.h"
 #include "p_mobj.h"
 #include "p_pspr.h"
+#include "p_spec.h"     // P_RunMovers
 #include "p_setup.h"
 #include "p_maputl.h"
 #include "p_map.h"      // VIEWHEIGHT
@@ -82,6 +83,7 @@ void P_RunThinkers(World& w) {
     }
     w.thinkering = false;
     w.mobjs.remove_if([](const mobj_t& m) { return m.removePending; });
+    P_RunMovers(w);   // P6a doors/lifts/floors/ceilings
 }
 
 mobj_t* P_TossBarrel(World& w) {

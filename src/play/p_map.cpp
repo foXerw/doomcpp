@@ -1,5 +1,6 @@
 #include "p_map.h"
 #include "p_inter.h"
+#include "p_spec.h"   // P_CrossSpecialLines (walk triggers)
 #include "core/m_fixed.h"
 #include "core/m_tables.h"
 #include <algorithm>
@@ -49,11 +50,11 @@ PosCheck P_CheckPosition(const MapData& m, const Blockmap& bm, const mobj_t& mo,
                 if (bb.right <= lminx || bb.left >= lmaxx ||
                     bb.top   <= lminy || bb.bottom >= lmaxy) continue;        // bbox early-out
                 if (P_BoxOnLineSide(bb, x1, y1, x2, y2) != -1) continue;      // not straddling
-                if (L.sidenum[1] < 0) { pc.ok = false; return pc; }           // one-sided wall
-                if (L.flags & ML_BLOCKING) { pc.ok = false; return pc; }      // explicit block
+                if (L.sidenum[1] < 0) { pc.ok = false; pc.blockedLine = li; return pc; }  // one-sided wall
+                if (L.flags & ML_BLOCKING) { pc.ok = false; pc.blockedLine = li; return pc; }  // explicit block
                 Opening op = P_LineOpening(m, L);
-                if (op.top      < pc.ceilingz) pc.ceilingz = op.top;
-                if (op.bottom   > pc.floorz)   pc.floorz   = op.bottom;
+                if (op.top      < pc.ceilingz) { pc.ceilingz = op.top;    pc.blockedLine = li; }
+                if (op.bottom   > pc.floorz)   { pc.floorz   = op.bottom; pc.blockedLine = li; }
                 if (op.lowfloor < pc.dropoffz) pc.dropoffz = op.lowfloor;
             }
     return pc;
@@ -401,6 +402,82 @@ mobj_t* P_SpawnPlayerMissile(World& w, player_t& p, mobjtype_t type) {
     th->floorz = pc.floorz;
     th->ceilingz = pc.ceilingz;
     return th;
+}
+
+// ---- P6a World-aware collision (thing↔thing blocking) ----
+PosCheck P_CheckPosition(World& w, const mobj_t& mo, fixed_t x, fixed_t y) {
+    PosCheck pc = P_CheckPosition(*w.map, *w.bm, mo, x, y);
+    if (!pc.ok) return pc;
+    const fixed_t r = mo.info ? mo.info->radius : 0;
+    const fixed_t mh = mo.height ? mo.height : (mo.info ? mo.info->height : 0);
+    for (const mobj_t& th : w.mobjs) {
+        if (&th == &mo || th.removePending) continue;
+        if (!(th.flags & MF_SOLID)) continue;                 // pickups/decorations don't block
+        const fixed_t tr = th.info ? th.info->radius : 0;
+        if (std::abs(th.x - x) >= r + tr || std::abs(th.y - y) >= r + tr) continue;
+        const fixed_t thh = th.height ? th.height : (th.info ? th.info->height : 0);
+        if (mo.z >= th.z + thh || mo.z + mh <= th.z) continue;   // vertically clear
+        pc.ok = false;
+        return pc;
+    }
+    return pc;
+}
+
+bool P_TryMove(World& w, mobj_t& mo, fixed_t nx, fixed_t ny) {
+    PosCheck pc = P_CheckPosition(w, mo, nx, ny);
+    if (!pc.ok) return false;
+    const fixed_t h = mo.height ? mo.height : (mo.info ? mo.info->height : PLAYERHEIGHT);
+    if (pc.ceilingz - pc.floorz < h) return false;
+    if (pc.ceilingz - mo.floorz < h) return false;
+    if (pc.floorz - mo.floorz > STEP_LIMIT) return false;
+    mo.x = nx; mo.y = ny;
+    mo.floorz = pc.floorz; mo.ceilingz = pc.ceilingz;
+    mo.subsector = R_PointInSubsector(*w.map, nx, ny);
+    return true;
+}
+
+bool P_SlideMove(World& w, mobj_t& mo, fixed_t dx, fixed_t dy) {
+    for (int pass = 0; pass < 3 && (dx || dy); ++pass) {
+        if (P_TryMove(w, mo, mo.x + dx, mo.y + dy)) return true;
+        PosCheck pc = P_CheckPosition(w, mo, mo.x + dx, mo.y + dy);
+        const int li = pc.blockedLine;
+        if (li < 0 || li >= static_cast<int>(w.map->lines.size())) break;
+        const line_t& L = w.map->lines[li];
+        if (L.v1 < 0 || L.v2 < 0 ||
+            L.v1 >= static_cast<int>(w.map->vertices.size()) ||
+            L.v2 >= static_cast<int>(w.map->vertices.size())) break;
+        fixed_t lx = w.map->vertices[L.v2].x - w.map->vertices[L.v1].x;
+        fixed_t ly = w.map->vertices[L.v2].y - w.map->vertices[L.v1].y;
+        fixed_t len = P_AproxDistance(lx, ly);
+        if (len == 0) break;
+        fixed_t ux = FixedDiv(lx, len), uy = FixedDiv(ly, len);
+        fixed_t dot = FixedMul(dx, ux) + FixedMul(dy, uy);
+        fixed_t ndx = FixedMul(dot, ux), ndy = FixedMul(dot, uy);
+        if (ndx == dx && ndy == dy) break;                    // no progress: stop
+        dx = ndx; dy = ndy;
+        if (std::abs(dx) + std::abs(dy) < (FRACUNIT >> 2)) break;
+    }
+    return false;
+}
+
+void P_MovePlayerWorld(World& w, player_t& p, fixed_t forward, fixed_t strafe, angle_t turn) {
+    mobj_t* mo = p.mo;
+    if (!mo || p.dead) return;
+    const fixed_t oldx = mo->x, oldy = mo->y;
+    mo->angle += turn;
+    const int fi = static_cast<int>((mo->angle >> ANGLETOFINESHIFT) & FINEMASK);
+    const fixed_t fc = finecosine[fi], fs = finesine[fi];
+    fixed_t dx = FixedMul(forward, fc) + FixedMul(strafe, fs);
+    fixed_t dy = FixedMul(forward, fs) - FixedMul(strafe, fc);
+    fixed_t mag = P_AproxDistance(dx, dy);
+    if (mag > MAXMOVE) {
+        fixed_t scale = FixedDiv(MAXMOVE, mag);
+        dx = FixedMul(dx, scale); dy = FixedMul(dy, scale);
+    }
+    P_SlideMove(w, *mo, dx, dy);
+    mo->subsector = R_PointInSubsector(*w.map, mo->x, mo->y);
+    P_CalcHeight(*w.map, p);
+    P_CrossSpecialLines(w, *mo, oldx, oldy);
 }
 
 void P_CalcHeight(const MapData& m, player_t& p) {

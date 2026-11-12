@@ -13,6 +13,7 @@ add_executable(doomcpp_tests
     test_p_tick.cpp
     test_p_attack.cpp
     test_p_pspr.cpp
+    test_p_spec.cpp
     test_r_draw.cpp
     test_r_data.cpp
     test_r_plane.cpp

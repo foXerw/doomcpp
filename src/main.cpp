@@ -16,6 +16,7 @@
 #include "play/p_setup.h"
 #include "play/p_tick.h"
 #include "play/p_pspr.h"
+#include "play/p_spec.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
@@ -313,6 +314,25 @@ int main(int argc, char** argv) {
                     check(target->health < hp0, "pistol fire damages a barrel in front");
                 }
 
+                // P6a: find a use-activated door and open it; its back sector ceiling must rise.
+                {
+                    bool tested = false;
+                    for (const line_t& L : map.lines) {
+                        if (L.special != 1 && L.special != 31 && L.special != 2 && L.special != 4)
+                            continue;
+                        int back = (L.sidenum[1] >= 0) ? map.sides[L.sidenum[1]].sector : -1;
+                        if (back < 0) continue;
+                        int c0 = map.sectors[back].ceilingheight;
+                        P_ActivateLine(w, L, w.player.mo);
+                        for (int t = 0; t < 70; ++t) P_RunThinkers(w);
+                        check(map.sectors[back].ceilingheight > c0,
+                              "use-activating a door raises its ceiling");
+                        tested = true;
+                        break;
+                    }
+                    if (!tested) std::cout << "SKIP: no use-door special in this map\n";
+                }
+
                 // Render path: a static frame must contain actual geometry, not just clear color.
                 P_BuildThingsBySubsec(w);
                 std::vector<std::uint32_t> fb(static_cast<size_t>(320) * 200, 0);
@@ -390,7 +410,7 @@ int main(int argc, char** argv) {
         }
 
         // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P5b combat)  WASD move, arrows turn, Ctrl fire, 1-8 weapons, G toss, ESC quit\n";
+        std::cout << "doomcpp 0.1.0  (P6a specials)  WASD move, arrows turn, Space use, Ctrl fire, 1-8 weapons, G toss, ESC quit\n";
         WadFile wad("assets/freedoom1.wad");
         MapData map = loadMap(wad, "E1M1");
         TextureLookup tex(wad);
@@ -424,12 +444,13 @@ int main(int argc, char** argv) {
                 int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
                 int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
                 int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
+                if (in.use) { in.use = false; P_UseLines(w, w.player); }   // P6a doors/switches
                 P_PlayerThink(w, in.fire, in.weaponSwitch);   // P5b weapons/psprites
                 in.weaponSwitch = -1;                         // edge-triggered slot
-                P_MovePlayer(map, map.blockmap, w.player,
-                             fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
+                P_MovePlayerWorld(w, w.player,
+                                  fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
                 P_TouchSpecialThings(w, *w.player.mo);   // P5b pickups
-                P_RunThinkers(w);
+                P_RunThinkers(w);                        // mobjs + P6a movers
                 ++ticCount;
             }
             P_BuildThingsBySubsec(w);
