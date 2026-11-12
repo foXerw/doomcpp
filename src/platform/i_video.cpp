@@ -83,6 +83,7 @@ bool pollEvents(Input& input) {
     input.strafeLeft  = kb[SDL_SCANCODE_A];
     input.strafeRight = kb[SDL_SCANCODE_D];
     input.fire        = kb[SDL_SCANCODE_LCTRL] || kb[SDL_SCANCODE_RCTRL];
+    input.run         = kb[SDL_SCANCODE_LSHIFT] || kb[SDL_SCANCODE_RSHIFT];
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) return false;
@@ -95,6 +96,16 @@ bool pollEvents(Input& input) {
         if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_SPACE &&
             ev.key.repeat == 0)
             input.use = true;
+        // P7 campaign: Enter continues, F5/F9 quick save/load.
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_RETURN &&
+            ev.key.repeat == 0)
+            input.enter = true;
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F5 &&
+            ev.key.repeat == 0)
+            input.save = true;
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F9 &&
+            ev.key.repeat == 0)
+            input.load = true;
         // P5b weapon slots: 1-8 -> fist/chainsaw/pistol/shotgun/chaingun/rocket/plasma/bfg.
         if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
             ev.key.keysym.scancode >= SDL_SCANCODE_1 && ev.key.keysym.scancode <= SDL_SCANCODE_8) {

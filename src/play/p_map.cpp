@@ -3,6 +3,8 @@
 #include "p_spec.h"   // P_CrossSpecialLines (walk triggers)
 #include "core/m_fixed.h"
 #include "core/m_tables.h"
+#include "core/i_system.h"
+#include "play/sfx.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -67,8 +69,9 @@ bool P_TryMove(const MapData& m, const Blockmap& bm, mobj_t& mo, fixed_t nx, fix
     if (pc.ceilingz - pc.floorz < h) return false;   // doesn't fit vertically
     if (pc.ceilingz - mo.floorz  < h) return false;   // not enough headroom
     if (pc.floorz   - mo.floorz  > STEP_LIMIT) return false;   // step up too high
-    // MT_PLAYER carries MF_DROPOFF -> exempt from dropoff gate (vanilla). dropoffz
-    // is still tracked for monster AI in P6.
+    // P6b: monsters without MF_DROPOFF refuse a step down larger than STEP_LIMIT
+    // (vanilla P_TryMove: tmfloorz - tmdropoffz > 24). The player has MF_DROPOFF.
+    if (!(mo.flags & MF_DROPOFF) && (pc.floorz - pc.dropoffz > STEP_LIMIT)) return false;
     mo.x = nx; mo.y = ny;
     mo.floorz   = pc.floorz;
     mo.ceilingz = pc.ceilingz;
@@ -204,6 +207,7 @@ mobj_t* P_LineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t z,
     }
 
     if (hit && thingT < wallT) {
+        I_StartSound(SFX_SLOP);
         const double zHit = oz + slopeU * thingT;
         const fixed_t px = static_cast<fixed_t>((ox + dx * thingT) * FRACUNIT);
         const fixed_t py = static_cast<fixed_t>((oy + dy * thingT) * FRACUNIT);
@@ -215,6 +219,7 @@ mobj_t* P_LineAttack(World& w, mobj_t* source, fixed_t x, fixed_t y, fixed_t z,
     }
 
     // Wall/range impact: puff at the impact point (clamped into the sector).
+    I_StartSound(SFX_TINK);
     const double t = (wallT < rangeU) ? wallT : rangeU;
     const double zHit = oz + slopeU * t;
     P_SpawnPuff(w, static_cast<fixed_t>((ox + dx * t) * FRACUNIT),
@@ -355,6 +360,10 @@ void P_TouchSpecialThings(World& w, mobj_t& mo) {
             if (std::abs(th.x - mo.x) > r + tr || std::abs(th.y - mo.y) > r + tr) return false;
             if (th.z > mo.z + mo.height || th.z + th.height < mo.z) return false;
             if (touchSpecialThing(w, th)) {
+                const int dn = th.info ? th.info->doomednum : -1;
+                I_StartSound((dn >= 2001 && dn <= 2005) ? SFX_WPNUP
+                           : (dn == 2013)               ? SFX_GETPOW
+                                                        : SFX_ITEMUP);
                 ++w.player.itemcount;
                 w.player.bonuscount = 6;
                 if (w.player.mo) w.player.mo->health = w.player.health;   // keep the mobj in sync
@@ -430,6 +439,7 @@ bool P_TryMove(World& w, mobj_t& mo, fixed_t nx, fixed_t ny) {
     if (pc.ceilingz - pc.floorz < h) return false;
     if (pc.ceilingz - mo.floorz < h) return false;
     if (pc.floorz - mo.floorz > STEP_LIMIT) return false;
+    if (!(mo.flags & MF_DROPOFF) && (pc.floorz - pc.dropoffz > STEP_LIMIT)) return false;
     mo.x = nx; mo.y = ny;
     mo.floorz = pc.floorz; mo.ceilingz = pc.ceilingz;
     mo.subsector = R_PointInSubsector(*w.map, nx, ny);
@@ -461,20 +471,25 @@ bool P_SlideMove(World& w, mobj_t& mo, fixed_t dx, fixed_t dy) {
 }
 
 void P_MovePlayerWorld(World& w, player_t& p, fixed_t forward, fixed_t strafe, angle_t turn) {
+    // P7: vanilla player physics. `forward`/`strafe` are per-tic thrust magnitudes
+    // (main passes 25*2048 walking / 50*2048 running, matching p_user.c forwardmove),
+    // not displacement. Momentum + friction then live in P_XYMovement, so knockback
+    // and wall sliding work the same way as for every other mobj.
     mobj_t* mo = p.mo;
     if (!mo || p.dead) return;
     const fixed_t oldx = mo->x, oldy = mo->y;
     mo->angle += turn;
     const int fi = static_cast<int>((mo->angle >> ANGLETOFINESHIFT) & FINEMASK);
     const fixed_t fc = finecosine[fi], fs = finesine[fi];
-    fixed_t dx = FixedMul(forward, fc) + FixedMul(strafe, fs);
-    fixed_t dy = FixedMul(forward, fs) - FixedMul(strafe, fc);
-    fixed_t mag = P_AproxDistance(dx, dy);
-    if (mag > MAXMOVE) {
-        fixed_t scale = FixedDiv(MAXMOVE, mag);
-        dx = FixedMul(dx, scale); dy = FixedMul(dy, scale);
+    if (forward) {
+        mo->momx += FixedMul(forward, fc);
+        mo->momy += FixedMul(forward, fs);
     }
-    P_SlideMove(w, *mo, dx, dy);
+    if (strafe) {
+        mo->momx += FixedMul(strafe, fs);
+        mo->momy -= FixedMul(strafe, fc);
+    }
+    P_XYMovement(w, *mo);
     mo->subsector = R_PointInSubsector(*w.map, mo->x, mo->y);
     P_CalcHeight(*w.map, p);
     P_CrossSpecialLines(w, *mo, oldx, oldy);
@@ -482,8 +497,16 @@ void P_MovePlayerWorld(World& w, player_t& p, fixed_t forward, fixed_t strafe, a
 
 void P_CalcHeight(const MapData& m, player_t& p) {
     if (!p.mo) return;
+    // Vanilla view bob: eye rises slightly with horizontal momentum (capped at MAXBOB).
+    fixed_t bob = 0;
+    if (p.mo->z <= p.mo->floorz + (4 << FRACBITS)) {
+        fixed_t mag = P_AproxDistance(p.mo->momx, p.mo->momy);
+        bob = FixedMul(mag, mag) >> 2;
+        const fixed_t MAXBOB = 16 << FRACBITS;
+        if (bob > MAXBOB) bob = MAXBOB;
+    }
     // Eye-height tracks mo->floorz (bbox opening floor = vanilla tmfloorz). P3d fix preserved.
-    fixed_t target = p.mo->floorz + VIEWHEIGHT;
+    fixed_t target = p.mo->floorz + VIEWHEIGHT + bob;
     p.viewz += (target - p.viewz) >> 3;                 // ~vanilla deltaviewheight >> 3
     int sec = (p.mo->subsector >= 0) ? sectorOf(m, p.mo->subsector) : -1;
     fixed_t cap = (sec >= 0 ? (static_cast<fixed_t>(m.sectors[sec].ceilingheight) << FRACBITS)

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <tuple>
@@ -12,11 +13,14 @@
 #include "core/m_fixed.h"     // FixedMul
 #include "core/m_tables.h"    // finecosine/finesine/R_InitTables
 #include "platform/i_video.h"
+#include "platform/i_sound.h"
 #include "play/info.h"
 #include "play/p_setup.h"
 #include "play/p_tick.h"
 #include "play/p_pspr.h"
 #include "play/p_spec.h"
+#include "play/p_enemy.h"
+#include "play/sfx.h"
 #include "play/p_maputl.h"
 #include "play/p_map.h"
 #include "render/r_bsp.h"
@@ -24,6 +28,11 @@
 #include "render/r_draw.h"
 #include "render/r_things.h"
 #include "ui/st_stuff.h"
+#include "ui/f_font.h"
+#include "ui/f_intermission.h"
+#include "play/g_game.h"
+#include "play/g_save.h"
+#include "play/midi.h"
 #include "wad/wadfile.h"
 
 // P3.5a BRIDGE (delete in P3.5b): the renderer still takes the P2a float angle
@@ -161,6 +170,97 @@ int main(int argc, char** argv) {
                           << (w.mobjs.size() - (w.player.mo ? 1u : 0u)) << ")\n";
                 return 0;
             }
+            if (std::string(argv[i]) == "--dumpframe-map" && i + 3 < argc) {
+                // Like --dumpframe but for an arbitrary map: <wad> <map> <bmp> [angle] [x y]
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, argv[i + 2]);
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                World w; w.map = &map; w.bm = &map.blockmap; w.mapName = argv[i + 2];
+                P_SetupLevel(w, map);
+                P_BuildThingsBySubsec(w);
+                fixed_t px, py; angle_t ang;
+                if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
+                if (i + 4 < argc) ang = degreesToBam(std::atoi(argv[i + 4]));
+                if (i + 6 < argc) {
+                    px = static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS));
+                    py = static_cast<fixed_t>(std::atof(argv[i + 6]) * (1 << FRACBITS));
+                }
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                fixed_t eyeZ0 = (sec0 >= 0 ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS)
+                                           : 0) + VIEWHEIGHT;
+                constexpr int VIEW_H = FH - 32;
+                R_RenderView(fb.data(), FW, VIEW_H, map, tex,
+                             static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                             bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
+                             &sprites, &w.thingsBySubsec);
+                StatusBar stbar(wad);
+                stbar.draw(fb.data(), FW, FH, w.player);
+                writeBMP(argv[i + 3], fb.data(), FW, FH);
+                std::cout << "wrote " << argv[i + 3] << " (" << argv[i + 2] << ")\n";
+                return 0;
+            }
+            if (std::string(argv[i]) == "--dumpintermission" && i + 2 < argc) {
+                // Render the real STCFN-font intermission screen to a BMP for visual checks.
+                WadFile wad(argv[i + 1]);
+                Font font(wad);
+                Intermission inter(wad);
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                inter.draw(fb.data(), FW, FH, "E1M1", 75, 50, 0, "E1M2", false);
+                writeBMP(argv[i + 2], fb.data(), FW, FH);
+                std::cout << "wrote " << argv[i + 2] << " (font valid=" << font.valid() << ")\n";
+                return 0;
+            }
+            if (std::string(argv[i]) == "--dumpmobs" && i + 3 < argc) {
+                // Render one frame per monster type spawned in front of the E1M1 start.
+                // Usage: --dumpmobs <wad> <bmpPrefix> [distance]
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                static const mobjtype_t types[] = {
+                    MT_POSSESSED, MT_SHOTGUY, MT_TROOP, MT_SERGEANT, MT_SHADOWS,
+                    MT_SKULL, MT_HEAD, MT_BRUISER, MT_CYBORG, MT_SPIDER,
+                };
+                static const char* names[] = {
+                    "POSS", "SPOS", "TROO", "SARG", "SHAD",
+                    "SKUL", "HEAD", "BOSS", "CYBR", "SPID",
+                };
+                fixed_t px, py; angle_t ang;
+                if (!playerStart(map, px, py, ang)) return 1;
+                const fixed_t dist = (i + 3 < argc)
+                    ? static_cast<fixed_t>(std::atof(argv[i + 3]) * FRACUNIT)
+                    : (160 << FRACBITS);
+                const int fi = static_cast<int>((ang >> ANGLETOFINESHIFT) & FINEMASK);
+                const fixed_t sx = px + FixedMul(finecosine[fi], dist);
+                const fixed_t sy = py + FixedMul(finesine[fi], dist);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                const fixed_t eyeZ = (sec0 >= 0
+                    ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS) : 0) + VIEWHEIGHT;
+                for (size_t k = 0; k < sizeof(types) / sizeof(types[0]); ++k) {
+                    World w; w.map = &map; w.bm = &map.blockmap;
+                    P_SetupLevel(w, map);
+                    mobj_t* mo = P_SpawnMobj(w, sx, sy, 0, types[k]);
+                    mo->angle = ang + ANG180;
+                    P_BuildThingsBySubsec(w);
+                    std::vector<std::uint32_t> fb(320u * 200u, 0);
+                    R_RenderView(fb.data(), 320, 200 - 32, map, tex,
+                                 static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                                 bamToRendererRad(ang), static_cast<float>(eyeZ >> FRACBITS), 0,
+                                 &sprites, &w.thingsBySubsec);
+                    StatusBar stbar(wad);
+                    stbar.draw(fb.data(), 320, 200, w.player);
+                    std::string out = std::string(argv[i + 2]) + names[k] + ".bmp";
+                    writeBMP(out, fb.data(), 320, 200);
+                    std::cout << "wrote " << out << "\n";
+                }
+                return 0;
+            }
             if (std::string(argv[i]) == "--dumppatch" && i + 3 < argc) {
                 // Debug: dump an arbitrary patch lump (HUD/status-bar graphics) to BMP.
                 WadFile wad(argv[i + 1]);
@@ -263,6 +363,16 @@ int main(int argc, char** argv) {
                     if (!ok) ++failures;
                 };
                 check(w.player.mo != nullptr, "P_SetupLevel spawns the player");
+                // P6b: every new monster/projectile sprite decodes from the IWAD.
+                {
+                    static const char* newSprites[] = {
+                        "BOSS", "HEAD", "SKUL", "CYBR", "SPID", "BAL1", "BAL2", "BAL7"
+                    };
+                    bool allSprites = true;
+                    for (const char* nm : newSprites)
+                        if (!sprites.resolve(nm, 'A', 0).patch) allSprites = false;
+                    check(allSprites, "new monster/projectile sprites decode from the IWAD");
+                }
                 if (!w.player.mo) { std::cout << "SMOKETEST FAILED\n"; return 1; }
 
                 // Toss first (from the open start pose), then let physics run: arc up, fall.
@@ -314,6 +424,37 @@ int main(int argc, char** argv) {
                     check(target->health < hp0, "pistol fire damages a barrel in front");
                 }
 
+                // P6b: monster AI on the real map path. Spawn a possessed 96 units in front,
+                // facing the player, and let its A_Look/A_Chase state chain run. It must wake
+                // and either close distance or land a hit (both go through the live AI path).
+                {
+                    mobj_t* mo = w.player.mo;
+                    int fi = (mo->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                    fixed_t dist = 96 << FRACBITS;
+                    fixed_t mx = mo->x + FixedMul(finecosine[fi], dist);
+                    fixed_t my = mo->y + FixedMul(finesine[fi], dist);
+                    mobj_t* mon = P_SpawnMobj(w, mx, my, mo->z, MT_POSSESSED);
+                    mon->angle = mo->angle + ANG180;     // face back toward the player (in FOV)
+                    mon->health = 100000;                // ignore crossfire from the real map
+                    w.player.health = 1000; mo->health = 1000;   // survive the AI loop
+                    w.player.dead = false;
+                    int hp0 = w.player.health;
+                    fixed_t d0 = std::abs(mon->x - mo->x) + std::abs(mon->y - mo->y);
+                    bool woke = false, moved = false, hit = false;
+                    for (int t = 0; t < 200; ++t) {
+                        P_RunThinkers(w);
+                        fixed_t d = std::abs(mon->x - mo->x) + std::abs(mon->y - mo->y);
+                        if (d != d0) moved = true;
+                        if (w.player.health < hp0) hit = true;
+                        if (mon->target == mo) woke = true;
+                    }
+                    check(woke, "monster AI wakes and targets the player");
+                    check(moved || hit, "awake monster chases or attacks the player");
+                    if (mon->health > 0) P_RemoveMobj(w, *mon);   // keep later checks clean
+                    w.player.health = 100; mo->health = 100;
+                    w.player.dead = false;
+                }
+
                 // P6a: synthetic door next to the player (room | closed door). Activate it and
                 // require the door sector's ceiling to rise; this exercises the real mover path.
                 {
@@ -362,6 +503,101 @@ int main(int argc, char** argv) {
                 std::cout << (failures ? "SMOKETEST FAILED (" : "SMOKETEST PASSED (")
                           << failures << " failures)\n";
                 return failures ? 1 : 0;
+            }
+            if (std::string(argv[i]) == "--aittest" && i + 1 < argc) {
+                // Headless AI soak on E1M1: one monster of each family in front of the player
+                // (separate runs so they don't block each other). Requires wake, chase and
+                // damage/projectile evidence through the real map/collision/render paths.
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, "E1M1");
+                const mobjtype_t types[] = { MT_POSSESSED, MT_TROOP, MT_SERGEANT,
+                                             MT_HEAD, MT_BRUISER, MT_SKULL };
+                const char* names[] = { "possessed", "imp", "demon", "caco", "baron", "lost soul" };
+                int failures = 0;
+                bool anyDamaged = false, anyMissile = false, anyClosed = false;
+                auto check = [&](bool ok, const std::string& what) {
+                    std::cout << (ok ? "PASS: " : "FAIL: ") << what << "\n";
+                    if (!ok) ++failures;
+                };
+                for (int k = 0; k < 6; ++k) {
+                    World w; w.map = &map; w.bm = &map.blockmap; w.mapName = "E1M1";
+                    P_SetupLevel(w, map);
+                    mobj_t* pm = w.player.mo;
+                    const int fi = (pm->angle >> ANGLETOFINESHIFT) & FINEMASK;
+                    const fixed_t d = 96 << FRACBITS;
+                    mobj_t* mon = P_SpawnMobj(
+                        w, pm->x + FixedMul(finecosine[fi], d),
+                           pm->y + FixedMul(finesine[fi], d), pm->z, types[k]);
+                    mon->angle = pm->angle + ANG180;
+                    mon->health = 100000;
+                    w.player.health = 100000; pm->health = 100000;
+                    const int hp0 = w.player.health;
+                    const fixed_t startDist = std::abs(mon->x - pm->x) + std::abs(mon->y - pm->y);
+                    bool woke = false;
+                    int peakMissiles = 0;
+                    for (int t = 0; t < 200; ++t) {
+                        P_RunThinkers(w);
+                        if (mon->target == pm) woke = true;
+                        int missiles = 0;
+                        for (const mobj_t& mo : w.mobjs)
+                            if ((mo.flags & MF_MISSILE) && !mo.removePending) ++missiles;
+                        if (missiles > peakMissiles) peakMissiles = missiles;
+                    }
+                    const bool damaged = w.player.health < hp0;
+                    const fixed_t endDist = std::abs(mon->x - pm->x) + std::abs(mon->y - pm->y);
+                    const bool closed = endDist < startDist;
+                    anyDamaged = anyDamaged || damaged;
+                    anyMissile = anyMissile || peakMissiles > 0;
+                    anyClosed = anyClosed || closed;
+                    std::cout << "  " << names[k] << ": woke=" << woke
+                              << " damaged=" << damaged << " missiles=" << peakMissiles
+                              << " dist=" << (startDist >> FRACBITS) << "->"
+                              << (endDist >> FRACBITS) << "\n";
+                    check(woke, std::string("AI soak: ") + names[k] + " wakes");
+                }
+                check(anyDamaged, "AI soak: monster attacks damaged the player");
+                check(anyMissile, "AI soak: imp/caco/baron fired projectiles");
+                check(anyClosed, "AI soak: monsters closed distance");
+                std::cout << (failures ? "AITTEST FAILED\n" : "AITTEST PASSED\n");
+                return failures ? 1 : 0;
+            }
+            if (std::string(argv[i]) == "--soundtest" && i + 1 < argc) {
+                // Decode every DS lump through the SDL backend and play a few sounds.
+                WadFile wad(argv[i + 1]);
+                if (!i_sound::init()) {
+                    std::cout << "SOUNDTEST SKIPPED (no audio device)\n";
+                    return 0;
+                }
+                i_sound::loadWad(wad);
+                I_SetSoundHook(&i_sound::play);
+                const int n = i_sound::loadedCount();
+                std::cout << "SOUNDTEST: decoded " << n << " / " << (NUMSFX - 1)
+                          << " sound effects\n";
+                I_StartSound(SFX_PISTOL);
+                SDL_Delay(150);
+                I_StartSound(SFX_DOROPN);
+                SDL_Delay(300);
+                I_StartSound(NUMSFX - 1);     // valid id sanity
+                int songs = 0, badSongs = 0;
+                for (int l = 0; l < wad.numLumps(); ++l) {
+                    const std::string nm = wad.lumpName(l);
+                    if (nm.size() < 2 || nm[0] != 'D' || nm[1] != '_') continue;
+                    auto raw = wad.readLump(l);
+                    MidiSong song;
+                    if (parseMidi(raw.data(), raw.size(), song)) ++songs; else ++badSongs;
+                }
+                std::cout << "SOUNDTEST: parsed " << songs << " MIDI tracks ("
+                          << badSongs << " bad)\n";
+                const float rms = i_sound::musicRms(wad, "D_E1M1", 2);
+                std::cout << "SOUNDTEST: D_E1M1 synth RMS=" << rms << "\n";
+                if (songs > 0) i_sound::playMusic(wad, "D_E1M1");
+                SDL_Delay(1500);
+                i_sound::stopMusic();
+                I_SetSoundHook(nullptr);
+                i_sound::shutdown();
+                const bool pass = n > 50 && songs > 20 && badSongs == 0 && rms > 200.0f;
+                std::cout << (pass ? "SOUNDTEST PASSED\n" : "SOUNDTEST FAILED\n");
+                return pass ? 0 : 1;
             }
             if (std::string(argv[i]) == "--tickdump" && i + 3 < argc) {
                 // P5a physics visualization (headless): load E1M1, spawn a barrel
@@ -422,64 +658,244 @@ int main(int argc, char** argv) {
             }
         }
 
-        // --- window / first-person 3D mode ---
-        std::cout << "doomcpp 0.1.0  (P6a specials)  WASD move, arrows turn, Space use, Ctrl fire, 1-8 weapons, G toss, ESC quit\n";
+        for (int ci = 1; ci < argc; ++ci) {
+            if (std::string(argv[ci]) == "--campaigntest" && ci + 1 < argc) {
+                // P7 integration: every map in E1-E4 loads, spawns and ticks without
+                // crashing; the campaign chain terminates; a save round-trips.
+                WadFile wad(argv[ci + 1]);
+                int failures = 0;
+                auto check = [&](bool ok, const std::string& what) {
+                    std::cout << (ok ? "PASS: " : "FAIL: ") << what << "\n";
+                    if (!ok) ++failures;
+                };
+                int mapCount = 0, monsterTotal = 0;
+                for (int ep = 1; ep <= 4; ++ep) {
+                    for (int mn = 1; mn <= 9; ++mn) {
+                        std::string name = "E#M#";
+                        name[1] = static_cast<char>('0' + ep);
+                        name[3] = static_cast<char>('0' + mn);
+                        MapData map = loadMap(wad, name);
+                        World w; w.map = &map; w.bm = &map.blockmap; w.mapName = name;
+                        P_SetupLevel(w, map);
+                        if (!w.player.mo) { check(false, name + " player spawn"); continue; }
+                        for (int t = 0; t < 15; ++t) P_RunThinkers(w);
+                        // Every map must expose a working exit line (P7 level flow).
+                        bool exitFound = false;
+                        bool exitSecret = false;
+                        for (const line_t& L : map.lines) {
+                            if (L.special == 11 || L.special == 52 ||
+                                L.special == 51 || L.special == 124) {
+                                exitFound = true;
+                                exitSecret = (L.special == 51 || L.special == 124);
+                                P_ActivateLine(w, L, w.player.mo);
+                                break;
+                            }
+                        }
+                        const bool bossMap = (name == "E2M8" || name == "E3M8");
+                        check((exitFound && w.levelExitRequested && w.secretExit == exitSecret) ||
+                              bossMap,
+                              name + " exit line sets the level-exit request");
+                        w.levelExitRequested = false;
+                        w.secretExit = false;
+                        ++mapCount;
+                        monsterTotal += w.totalKills;
+                        std::cout << "  " << name << ": mobjs=" << w.mobjs.size()
+                                  << " monsters=" << w.totalKills
+                                  << " items=" << w.totalItems
+                                  << " playerHP=" << w.player.health << "\n";
+                        check(w.mobjs.size() > 1, name + " spawns things");
+                    }
+                }
+                check(mapCount == 36, "all 36 E1-E4 maps load and tick");
+
+                std::string cur = "E1M1";
+                int steps = 0;
+                while (!cur.empty() && steps < 64) { cur = G_NextLevelName(cur, false); ++steps; }
+                check(cur.empty() && steps == 32, "normal campaign chain reaches the end after 32 maps");
+
+                // Save/load round-trip on E1M1.
+                MapData map = loadMap(wad, "E1M1");
+                World w; w.map = &map; w.bm = &map.blockmap; w.mapName = "E1M1";
+                P_SetupLevel(w, map);
+                w.player.ammo[AM_SHELL] = 23;
+                w.tic = 1234;
+                const std::string path = "doomcpp-campaigntest-save.dat";
+                bool okSave = G_SaveGame(w, path);
+                w.player.ammo[AM_SHELL] = 0;
+                w.tic = 0;
+                bool okLoad = okSave && G_LoadGame(w, path);
+                check(okSave && okLoad && w.player.ammo[AM_SHELL] == 23 && w.tic == 1234,
+                      "save/load round-trips on E1M1");
+                std::remove(path.c_str());
+
+                std::cout << (failures ? "CAMPAIGNTEST FAILED (" : "CAMPAIGNTEST PASSED (")
+                          << failures << " failures, " << mapCount << " maps, "
+                          << monsterTotal << " monsters)\n";
+                return failures ? 1 : 0;
+            }
+        }
+        // --- window / first-person 3D mode (P7 campaign loop) ---
+        std::cout << "doomcpp 0.1.0  (P7 campaign)  WASD move, arrows turn, Space use, Ctrl fire,"
+                     " 1-8 weapons, G toss, F5/F9 save/load, ESC quit\n";
+        bool noSound = false;
+        std::string startLevel = "E1M1";
+        for (int i = 1; i < argc; ++i) {
+            const std::string a = argv[i];
+            if (a == "--nosound") noSound = true;
+            else if (a == "--warp" && i + 1 < argc) startLevel = argv[++i];
+        }
         WadFile wad("assets/freedoom1.wad");
-        MapData map = loadMap(wad, "E1M1");
+        const bool audio = !noSound && i_sound::init();
+        if (audio) {
+            i_sound::loadWad(wad);
+            I_SetSoundHook(&i_sound::play);
+        }
         TextureLookup tex(wad);
         SpriteCache sprites(wad);
         StatusBar stbar(wad);
-        World w; w.map = &map; w.bm = &map.blockmap;
-        P_SetupLevel(w, map);   // spawns w.player.mo (x/y/angle/floorz/subsector) + sets w.player.viewz
+        Font font(wad);
+        Intermission inter(wad);
+
+        MapData map;
+        World w;
+        std::string levelName;
+        auto loadLevel = [&](const std::string& name, const player_t* carry) {
+            map = loadMap(wad, name);
+            w.map = &map;
+            w.bm = &map.blockmap;
+            w.mapName = name;
+            levelName = name;
+            P_SetupLevel(w, map, carry);
+            if (audio) i_sound::playMusic(wad, "D_" + name);
+        };
+        loadLevel(startLevel, nullptr);
+
+        enum class GameState { Playing, Intermission, Dead, Victory };
+        GameState state = GameState::Playing;
+        std::string nextLevel;
+        const std::string SAVE_PATH = "doomcpp-quicksave.dat";
 
         constexpr int FB_W = 320, FB_H = 200;
-        if (!i_video::init(FB_W, FB_H, "doomcpp - P5a")) return 1;
+        if (!i_video::init(FB_W, FB_H, "doomcpp - P7")) return 1;
         std::vector<std::uint32_t> fb(static_cast<size_t>(FB_W) * FB_H, 0);
 
-        const fixed_t moveSpeed = 5 << FRACBITS;        // per 35Hz tic
-        const angle_t turnSpeed = degreesToBam(4);      // ~4 deg/tic (matches old ~0.07 rad)
+        // Vanilla forwardmove/sidemove (p_user.c) scaled by 2048 for P_Thrust.
+        const fixed_t walkThrust = 25 * 2048;
+        const fixed_t runThrust  = 50 * 2048;
+        const fixed_t walkStrafe = 24 * 2048;
+        const fixed_t runStrafe  = 40 * 2048;
+        const angle_t turnSpeed = degreesToBam(4);      // ~4 deg/tic
         constexpr uint32_t TIC_MS = 1000 / 35;
         Input in{};
         bool running = true;
-        uint32_t prev = SDL_GetTicks(), acc = 0, ticCount = 0;
+        uint32_t prev = SDL_GetTicks(), acc = 0;
         while (running) {
             running = i_video::pollEvents(in);
-            // P5a toss milestone: G spawns an MT_BARREL in front of the player
-            // with forward+up momentum (edge-triggered; handled at most once per
-            // frame, OUTSIDE the tic batch so a held key never spawns 4×/frame).
-            if (in.spawn) {
-                in.spawn = false;
-                P_TossBarrel(w);
+
+            if (state == GameState::Intermission || state == GameState::Victory) {
+                if (in.enter || in.use) {
+                    in.enter = in.use = false;
+                    if (state == GameState::Victory) {
+                        loadLevel("E1M1", nullptr);
+                        state = GameState::Playing;
+                    } else if (nextLevel.empty()) {
+                        state = GameState::Victory;
+                        if (audio) i_sound::playMusic(wad, "D_VICTOR");
+                    } else {
+                        player_t carry = w.player;
+                        loadLevel(nextLevel, &carry);
+                        state = GameState::Playing;
+                    }
+                }
+            } else if (state == GameState::Dead) {
+                if (in.enter) {
+                    in.enter = false;
+                    loadLevel(levelName, nullptr);
+                    state = GameState::Playing;
+                }
+            } else {
+                // ---- Playing: quick save/load, toss, tics ----
+                if (in.save) {
+                    in.save = false;
+                    I_Printf(G_SaveGame(w, SAVE_PATH) ? "game saved" : "save failed");
+                }
+                if (in.load) {
+                    in.load = false;
+                    std::string savedLevel;
+                    if (G_SaveGameLevel(SAVE_PATH, savedLevel)) {
+                        if (savedLevel != levelName) loadLevel(savedLevel, nullptr);
+                        if (G_LoadGame(w, SAVE_PATH)) {
+                            state = GameState::Playing;
+                            I_Printf("game loaded");
+                        } else {
+                            I_Printf("load failed");
+                        }
+                    } else {
+                        I_Printf("no save file");
+                    }
+                }
+                if (in.spawn) {
+                    in.spawn = false;
+                    P_TossBarrel(w);
+                }
+                uint32_t now = SDL_GetTicks();
+                acc += (now - prev); prev = now;
+                for (int n = 0; n < 4 && acc >= TIC_MS; ++n, acc -= TIC_MS) {
+                    int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
+                    int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
+                    int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
+                    if (in.use && !w.player.dead) { in.use = false; P_UseLines(w, w.player); }
+                    P_PlayerThink(w, in.fire, in.weaponSwitch);
+                    in.weaponSwitch = -1;
+                    const fixed_t thrust = in.run ? runThrust : walkThrust;
+                    const fixed_t side   = in.run ? runStrafe : walkStrafe;
+                    P_MovePlayerWorld(w, w.player,
+                                      fwd * thrust, str * side, trn * turnSpeed);
+                    if (!w.player.dead) P_TouchSpecialThings(w, *w.player.mo);
+                    P_RunThinkers(w);
+                    if (!w.player.dead) P_CheckSecrets(w, *w.player.mo);
+                    if (w.levelExitRequested) break;
+                }
+                if (w.player.dead || w.player.health <= 0) {
+                    state = GameState::Dead;
+                } else if (w.levelExitRequested) {
+                    nextLevel = G_NextLevelName(levelName, w.secretExit);
+                    state = GameState::Intermission;
+                    if (audio) i_sound::playMusic(wad, "D_INTER");
+                }
             }
-            uint32_t now = SDL_GetTicks();
-            acc += (now - prev); prev = now;
-            for (int n = 0; n < 4 && acc >= TIC_MS; ++n, acc -= TIC_MS) {
-                int fwd = (in.forward ? 1 : 0) - (in.back ? 1 : 0);
-                int str = (in.strafeRight ? 1 : 0) - (in.strafeLeft ? 1 : 0);
-                int trn = (in.turnLeft ? 1 : 0) - (in.turnRight ? 1 : 0);
-                if (in.use) { in.use = false; P_UseLines(w, w.player); }   // P6a doors/switches
-                P_PlayerThink(w, in.fire, in.weaponSwitch);   // P5b weapons/psprites
-                in.weaponSwitch = -1;                         // edge-triggered slot
-                P_MovePlayerWorld(w, w.player,
-                                  fwd * moveSpeed, str * moveSpeed, trn * turnSpeed);
-                P_TouchSpecialThings(w, *w.player.mo);   // P5b pickups
-                P_RunThinkers(w);                        // mobjs + P6a movers
-                ++ticCount;
+
+            in.enter = in.save = in.load = false;
+            in.use = false;
+
+            if (state == GameState::Intermission || state == GameState::Victory) {
+                int kills = w.totalKills > 0 ? (w.player.killcount * 100 / w.totalKills) : 0;
+                int items = w.totalItems > 0 ? (w.player.itemcount * 100 / w.totalItems) : 0;
+                int secrets = w.totalSecrets > 0
+                    ? (w.player.secretsFound * 100 / w.totalSecrets) : 0;
+                inter.draw(fb.data(), FB_W, FB_H, levelName, kills, items, secrets,
+                           nextLevel, state == GameState::Victory);
+            } else {
+                P_BuildThingsBySubsec(w);
+                constexpr int VIEW_H = FB_H - 32;   // vanilla 320x168 view + status bar
+                R_RenderView(fb.data(), FB_W, VIEW_H, map, tex,
+                             static_cast<float>(w.player.mo->x >> FRACBITS),
+                             static_cast<float>(w.player.mo->y >> FRACBITS),
+                             bamToRendererRad(w.player.mo->angle),
+                             static_cast<float>(w.player.viewz >> FRACBITS),
+                             w.tic, &sprites, &w.thingsBySubsec);
+                drawPlayerSprites(w, sprites, fb.data(), FB_W, VIEW_H);
+                stbar.draw(fb.data(), FB_W, FB_H, w.player);
+                if (state == GameState::Dead) {
+                    font.drawCentered(fb.data(), FB_W, FB_H, 76, "YOU DIED", 2);
+                    font.drawCentered(fb.data(), FB_W, FB_H, 104, "PRESS ENTER TO RESTART", 1);
+                }
             }
-            P_BuildThingsBySubsec(w);
-            constexpr int VIEW_H = FB_H - 32;   // vanilla 320x168 view + status bar
-            R_RenderView(fb.data(), FB_W, VIEW_H, map, tex,
-                         static_cast<float>(w.player.mo->x >> FRACBITS),
-                         static_cast<float>(w.player.mo->y >> FRACBITS),
-                         bamToRendererRad(w.player.mo->angle),
-                         static_cast<float>(w.player.viewz >> FRACBITS),
-                         ticCount, &sprites, &w.thingsBySubsec);
-            drawPlayerSprites(w, sprites, fb.data(), FB_W, VIEW_H);
-            stbar.draw(fb.data(), FB_W, FB_H, w.player);
             i_video::present(fb.data());
         }
 
         i_video::shutdown();
+        if (audio) i_sound::shutdown();
         return 0;
     } catch (const std::exception& e) {
         I_Printf(std::string("Fatal: ") + e.what());

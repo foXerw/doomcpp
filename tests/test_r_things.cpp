@@ -143,7 +143,7 @@ TEST_CASE("R_ProjectSprite picks front/back rotation by relative facing") {
 TEST_CASE("R_DrawVisSprite writes opaque texel, skips transparent, bounded by screen") {
     int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
     std::vector<uint32_t> fb(w*h, 0u);
-    std::vector<float> wd(w, std::numeric_limits<float>::infinity());   // no walls -> sprite draws
+    std::vector<float> wd(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());   // no walls -> sprite draws
     // 2x2 patch: opaque red at (row0,col0) and (row0,col1); transparent elsewhere
     Patch p{2,2, 0,2, std::vector<uint32_t>(4, 0u)};
     uint32_t red = (0xFFu<<24)|0x00u|(0x00u<<8)|0xFFu;   // R=255
@@ -163,7 +163,7 @@ TEST_CASE("R_DrawVisSprite writes opaque texel, skips transparent, bounded by sc
 TEST_CASE("R_DrawVisSprite flip mirrors texel column") {
     int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
     std::vector<uint32_t> fb(w*h, 0u);
-    std::vector<float> wd(w, std::numeric_limits<float>::infinity());
+    std::vector<float> wd(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
     // 2x1 patch: red at col0, green at col1 (both opaque so the swap is non-vacuous)
     Patch p{2,1, 0,1, std::vector<uint32_t>(2,0u)};
     p.rgba[0] = (0xFFu<<24)|0xFFu;            // col0 red-ish (R=255,A=255)
@@ -182,6 +182,25 @@ TEST_CASE("R_DrawVisSprite flip mirrors texel column") {
     CHECK(fbf[2*w+3] == left);
 }
 
+TEST_CASE("R_DrawVisSprite: a low wall occludes only the rows it covers (P7 per-pixel depth)") {
+    int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
+    std::vector<uint32_t> fb(w*h, 0u);
+    Patch p{2,2, 0,2, std::vector<uint32_t>(4, 0u)};
+    uint32_t red = (0xFFu<<24)|0xFFu;
+    for (auto& c : p.rgba) c = red;                // 2x2 fully opaque
+    vissprite_t vs;
+    vs.depth=4.0f; vs.scale=0.25f; vs.x1=2; vs.x2=5; vs.xTrueLeft=2.0f;
+    vs.gzt=6.0f; vs.patch=&p; vs.flip=false; vs.light=255;
+    // The sprite covers rows 2..3. A floor riser at 32 units only covers row 3.
+    std::vector<float> wd(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    wd[3*w+2] = 3.0f; wd[3*w+3] = 3.0f;
+    R_DrawVisSprite(fb.data(), w, h, vs, eyeZ, focal, wd);
+    CHECK(fb[2*w+2] != 0u);        // row 2 (above the riser) still drawn
+    CHECK(fb[2*w+3] != 0u);
+    CHECK(fb[3*w+2] == 0u);        // row 3 hidden by the nearer riser pixel
+    CHECK(fb[3*w+3] == 0u);
+}
+
 TEST_CASE("R_DrawVisSprite occludes columns behind a nearer wall") {
     int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
     std::vector<uint32_t> fb(w*h, 0u);
@@ -193,16 +212,33 @@ TEST_CASE("R_DrawVisSprite occludes columns behind a nearer wall") {
     vs.depth=4.0f; vs.scale=0.25f; vs.x1=2; vs.x2=5; vs.xTrueLeft=2.0f;
     vs.gzt=6.0f; vs.patch=&p; vs.flip=false; vs.light=255;
     // wallDepth[x] < vis.depth at one column hides it; everywhere else stays open.
-    std::vector<float> wd(w, std::numeric_limits<float>::infinity());
-    wd[3] = 3.0f;   // a wall at x=3 is nearer than the sprite (3 < depth 4) -> occludes
+    std::vector<float> wd(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    wd[2*w+3] = 3.0f;   // wall pixels at x=3 are nearer than the sprite (3 < depth 4) -> occlude
+    wd[3*w+3] = 3.0f;
     R_DrawVisSprite(fb.data(), w, h, vs, eyeZ, focal, wd);
     CHECK(fb[2*w+3] == 0u);                       // x=3 occluded -> untouched
     CHECK((fb[2*w+2] >> 24 & 0xFF) == 0xFF);      // x=2 still drawn
     // equal-depth wall also occludes (test uses `wallDepth[x] <= vis.depth`)
-    std::vector<float> wd2(w, std::numeric_limits<float>::infinity());
-    wd2[3] = 4.0f;   // == vis.depth
+    std::vector<float> wd2(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    wd2[2*w+3] = 4.0f;   // == vis.depth
+    wd2[3*w+3] = 4.0f;
     std::vector<uint32_t> fb2(w*h, 0u);
     R_DrawVisSprite(fb2.data(), w, h, vs, eyeZ, focal, wd2);
     CHECK(fb2[2*w+3] == 0u);                      // x=3 still occluded at equal depth
     CHECK((fb2[2*w+2] >> 24 & 0xFF) == 0xFF);     // x=2 still drawn
+}
+
+TEST_CASE("R_DrawVisSprite fuzz (spectre) blends with the framebuffer") {
+    int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
+    std::vector<uint32_t> fb(w*h, 0x000000FFu);          // opaque black background
+    Patch p{1,1, 0,1, std::vector<uint32_t>(1, 0xFF0000FFu)};   // opaque red
+    vissprite_t vs;
+    vs.depth=4.0f; vs.scale=0.25f; vs.x1=2; vs.x2=2; vs.xTrueLeft=2.0f;
+    vs.gzt=6.0f; vs.patch=&p; vs.flip=false; vs.fuzz=true; vs.light=255;
+    std::vector<float> wd(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    R_DrawVisSprite(fb.data(), w, h, vs, eyeZ, focal, wd);
+    const uint32_t px = fb[2*w+2];
+    CHECK((px >> 24 & 0xFF) > 100);                      // half of 255 over black
+    CHECK((px >> 24 & 0xFF) < 160);
+    CHECK((px & 0xFFu) == 0xFFu);                        // still opaque
 }

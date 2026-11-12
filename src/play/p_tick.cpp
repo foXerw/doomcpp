@@ -8,11 +8,31 @@
 #include "info.h"
 #include "core/m_fixed.h"    // FixedMul
 #include "core/m_tables.h"   // finecosine/finesine
+#include <algorithm>
 #include <iterator>          // std::next
 
-void P_SetupLevel(World& w, const MapData& m) {
+void P_SetupLevel(World& w, const MapData& m, const player_t* carry) {
+    player_t saved{};
+    if (carry) {
+        saved.health = carry->health;
+        for (int i = 0; i < 2; ++i) saved.armorpoints[i] = carry->armorpoints[i];
+        saved.armortype = carry->armortype;
+        for (int i = 0; i < NUMAMMO; ++i) saved.ammo[i] = carry->ammo[i];
+        for (int i = 0; i < NUMAMMO; ++i) saved.maxammo[i] = carry->maxammo[i];
+        saved.weapons = carry->weapons;
+        saved.readyweapon = carry->readyweapon;
+        saved.keys = carry->keys;
+    }
     w.mobjs.clear();
     w.player.mo = nullptr;
+    w.movers.clear();
+    w.levelExitRequested = false;
+    w.secretExit = false;
+    w.totalKills = 0;
+    w.totalItems = 0;
+    w.totalSecrets = 0;
+    w.secretFound.assign(m.sectors.size(), 0);
+    for (const sector_t& s : m.sectors) if (s.special == 9) ++w.totalSecrets;
     for (const thing_t& th : m.things) {
         int mt = mobjtypeForDoomednum(th.type);
         if (mt == MT_PLAYER) {
@@ -36,7 +56,14 @@ void P_SetupLevel(World& w, const MapData& m) {
             mo.floorz   = mo.z;
             mo.ceilingz = static_cast<fixed_t>(m.sectors[sec].ceilingheight) << FRACBITS;
             mo.light    = m.sectors[sec].lightlevel;
+            if (mo.flags & MF_FLOAT) {       // P6b: lost souls/cacos hover above the floor
+                fixed_t hover = mo.z + (24 << FRACBITS);
+                fixed_t maxz = mo.ceilingz - mo.height;
+                mo.z = (maxz < mo.floorz) ? mo.floorz : std::min(hover, maxz);
+            }
         }
+        if (mo.flags & MF_COUNTKILL) ++w.totalKills;
+        if (mo.flags & MF_SPECIAL)   ++w.totalItems;
     }
     // P5b: reset combat state and give the player the pistol (vanilla G_PlayerReborn subset).
     if (w.player.mo) {
@@ -51,8 +78,21 @@ void P_SetupLevel(World& w, const MapData& m) {
         w.player.ammo[AM_CLIP] = 50;                          // vanilla pistol start
         w.player.weapons = (1u << WP_FIST) | (1u << WP_PISTOL);
         w.player.readyweapon = WP_PISTOL;
+        if (carry) {                                          // P7: carry inventory
+            w.player.health = saved.health > 0 ? saved.health : 100;
+            for (int i = 0; i < 2; ++i) w.player.armorpoints[i] = saved.armorpoints[i];
+            w.player.armortype = saved.armortype;
+            for (int i = 0; i < NUMAMMO; ++i)
+                w.player.ammo[i] = std::min(saved.ammo[i], w.player.maxammo[i]);
+            w.player.weapons = saved.weapons | (1u << WP_FIST);
+            w.player.keys = saved.keys;
+            if (saved.readyweapon >= 0 && saved.readyweapon < NUMWEAPONS &&
+                (w.player.weapons & (1u << saved.readyweapon)))
+                w.player.readyweapon = saved.readyweapon;
+            mo->health = w.player.health;
+        }
         w.player.pendingweapon = NUMWEAPONS;                  // no change pending
-        P_SetPsprite(w, w.player, 0, weaponinfo[WP_PISTOL].readystate);
+        P_SetPsprite(w, w.player, 0, weaponinfo[w.player.readyweapon].readystate);
         P_SetPsprite(w, w.player, 1, S_NULL);
     }
 }
@@ -71,6 +111,16 @@ void P_BuildThingsBySubsec(World& w) {
         int sec = sectorOf(*w.map, mo.subsector);
         if (sec >= 0) mo.light = mo.fullbright ? 255 : w.map->sectors[sec].lightlevel;
     }
+}
+
+void P_CheckSecrets(World& w, mobj_t& mo) {
+    if (!w.map || &mo != w.player.mo) return;
+    const int sec = sectorOf(*w.map, mo.subsector);
+    if (sec < 0 || sec >= static_cast<int>(w.map->sectors.size())) return;
+    if (w.map->sectors[sec].special != 9) return;
+    if (sec >= static_cast<int>(w.secretFound.size()) || w.secretFound[sec]) return;
+    w.secretFound[sec] = 1;
+    ++w.player.secretsFound;
 }
 
 void P_RunThinkers(World& w) {
@@ -96,6 +146,7 @@ mobj_t* P_TossBarrel(World& w) {
                             mo->floorz, MT_BARREL);
     b->floorz = mo->floorz;
     b->ceilingz = mo->ceilingz;
+    b->target = mo;                 // explosion credit / monster infighting
     b->momx = FixedMul(fc, 10 << FRACBITS);
     b->momy = FixedMul(fs, 10 << FRACBITS);
     b->momz = 9 << FRACBITS;   // upward toss

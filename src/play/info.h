@@ -65,6 +65,15 @@ enum spritenum_t {
     SPR_SAWG,
     SPR_SHTF,
     SPR_SHTG,
+    // P6b: remaining DOOM 1 monsters/projectiles present in Freedoom E1–E4
+    SPR_BAL1,   // imp fireball
+    SPR_BAL2,   // cacodemon fireball
+    SPR_BAL7,   // baron plasma ball
+    SPR_SKUL,   // lost soul
+    SPR_HEAD,   // cacodemon
+    SPR_BOSS,   // baron of hell
+    SPR_CYBR,   // cyberdemon
+    SPR_SPID,   // spider mastermind
     NUMSPRITES
 };
 extern const char* const sprnames[];   // index = spritenum_t
@@ -337,6 +346,40 @@ enum statenum_t {
     S_BLOODYTWITCH2,
     S_BLOODYTWITCH3,
     S_BLOODYTWITCH4,
+    // ---- P6b monster projectiles ----
+    S_TBALL1, S_TBALL2, S_TBALLX1, S_TBALLX2, S_TBALLX3,
+    S_RBALL1, S_RBALL2, S_RBALLX1, S_RBALLX2, S_RBALLX3,
+    S_BRBALL1, S_BRBALL2, S_BRBALLX1, S_BRBALLX2, S_BRBALLX3,
+    // ---- lost soul ----
+    S_SKULL_STND, S_SKULL_STND2, S_SKULL_RUN1, S_SKULL_RUN2,
+    S_SKULL_ATK1, S_SKULL_ATK2, S_SKULL_ATK3,
+    S_SKULL_PAIN, S_SKULL_PAIN2,
+    S_SKULL_DIE1, S_SKULL_DIE2, S_SKULL_DIE3, S_SKULL_DIE4, S_SKULL_DIE5, S_SKULL_DIE6,
+    // ---- cacodemon ----
+    S_HEAD_STND, S_HEAD_RUN1, S_HEAD_ATK1, S_HEAD_ATK2, S_HEAD_ATK3,
+    S_HEAD_PAIN, S_HEAD_PAIN2,
+    S_HEAD_DIE1, S_HEAD_DIE2, S_HEAD_DIE3, S_HEAD_DIE4, S_HEAD_DIE5, S_HEAD_DIE6,
+    // ---- baron of hell ----
+    S_BOSS_STND, S_BOSS_STND2,
+    S_BOSS_RUN1, S_BOSS_RUN2, S_BOSS_RUN3, S_BOSS_RUN4,
+    S_BOSS_RUN5, S_BOSS_RUN6, S_BOSS_RUN7, S_BOSS_RUN8,
+    S_BOSS_ATK1, S_BOSS_ATK2, S_BOSS_ATK3,
+    S_BOSS_PAIN, S_BOSS_PAIN2,
+    S_BOSS_DIE1, S_BOSS_DIE2, S_BOSS_DIE3, S_BOSS_DIE4, S_BOSS_DIE5, S_BOSS_DIE6, S_BOSS_DIE7,
+    // ---- cyberdemon ----
+    S_CYBORG_STND, S_CYBORG_STND2,
+    S_CYBORG_RUN1, S_CYBORG_RUN2, S_CYBORG_RUN3, S_CYBORG_RUN4,
+    S_CYBORG_ATK1, S_CYBORG_ATK2, S_CYBORG_ATK3,
+    S_CYBORG_PAIN, S_CYBORG_PAIN2,
+    S_CYBORG_DIE1, S_CYBORG_DIE2, S_CYBORG_DIE3, S_CYBORG_DIE4,
+    S_CYBORG_DIE5, S_CYBORG_DIE6, S_CYBORG_DIE7, S_CYBORG_DIE8,
+    // ---- spider mastermind ----
+    S_SPID_STND, S_SPID_STND2,
+    S_SPID_RUN1, S_SPID_RUN2, S_SPID_RUN3, S_SPID_RUN4,
+    S_SPID_ATK1, S_SPID_ATK2, S_SPID_ATK3, S_SPID_ATK4,
+    S_SPID_PAIN, S_SPID_PAIN2,
+    S_SPID_DIE1, S_SPID_DIE2, S_SPID_DIE3, S_SPID_DIE4, S_SPID_DIE5,
+    S_SPID_DIE6, S_SPID_DIE7, S_SPID_DIE8, S_SPID_DIE9,
     NUMSTATES
 };
 
@@ -350,6 +393,9 @@ enum mobjtype_t {
     MT_D2011, MT_D2012, MT_D2013, MT_D2014, MT_D2015, MT_D2018, MT_D2028,
     MT_D2046, MT_D2048, MT_D2049,
     MT_ROCKET, MT_PLASMA, MT_BFG, MT_PUFF, MT_BLOOD,   // P5b projectiles/effects
+    // P6b monsters/projectiles
+    MT_TROOPSHOT, MT_HEADSHOT, MT_BRUISERSHOT,
+    MT_SKULL, MT_HEAD, MT_BRUISER, MT_CYBORG, MT_SPIDER, MT_SHADOWS,
     NUMMOBJTYPES
 };
 
@@ -386,6 +432,13 @@ enum action_t {
     A_TroopAttack,
     A_WeaponReady,
     A_XScream,
+    // P6b
+    A_BossDeath,
+    A_BruisAttack,
+    A_CyberAttack,
+    A_HeadAttack,
+    A_SkullAttack,
+    A_SpidAttack,
 };
 
 struct state_t {

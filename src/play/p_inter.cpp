@@ -4,6 +4,8 @@
 #include "core/m_fixed.h"
 #include "core/m_random.h"
 #include "core/m_tables.h"
+#include "core/i_system.h"
+#include "play/sfx.h"
 #include <cmath>
 #include <cstdint>
 
@@ -52,10 +54,18 @@ void P_DamageMobj(World& w, mobj_t& target, mobj_t* source, int damage) {
 
     if (target.health <= 0) { P_KillMobj(w, target, source); return; }
 
+    // P6b: remember who hurt us (monster infighting + A_Chase target switching).
+    if (source && source != &target) {
+        target.target = source;
+        target.flags |= MF_JUSTHIT;
+        target.reactiontime = 0;
+    }
+
     // Pain chance (vanilla P_Random; M_Random is our deterministic RNG).
     if (target.info && target.info->painstate != S_NULL &&
         target.info->painchance > 0 &&
         static_cast<int>(M_Random() & 255) < target.info->painchance) {
+        I_StartSound(isPlayer ? SFX_POPAIN : SFX_DMPAIN);
         P_SetMobjState(w, target, target.info->painstate);
     }
 

@@ -29,7 +29,12 @@ add_library(doomcore STATIC
     src/play/p_pspr.cpp
     src/play/p_user.cpp
     src/play/p_inter.cpp
+    src/play/p_enemy.cpp
     src/play/p_spec.cpp
+    src/play/g_game.cpp
+    src/play/sfx.cpp
+    src/play/g_save.cpp
+    src/play/midi.cpp
     src/play/info.cpp
     src/render/r_draw.cpp
     src/render/r_data.cpp
@@ -37,6 +42,8 @@ add_library(doomcore STATIC
     src/render/r_things.cpp
     src/render/r_bsp.cpp
     src/ui/st_stuff.cpp
+    src/ui/f_font.cpp
+    src/ui/f_intermission.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 
@@ -44,6 +51,7 @@ target_include_directories(doomcore PUBLIC src)
 find_package(SDL2 CONFIG REQUIRED)
 add_library(doomplatform STATIC
     src/platform/i_video.cpp
+    src/platform/i_sound.cpp
 )
 target_include_directories(doomplatform PUBLIC src)
 target_link_libraries(doomplatform PUBLIC SDL2::SDL2 ${CMAKE_DL_LIBS})
@@ -70,4 +78,10 @@ add_subdirectory(tests)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
     add_test(NAME runtime_smoke
              COMMAND $<TARGET_FILE:doomcpp> --smoketest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    add_test(NAME ai_smoke
+             COMMAND $<TARGET_FILE:doomcpp> --aittest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    add_test(NAME campaign_smoke
+             COMMAND $<TARGET_FILE:doomcpp> --campaigntest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    add_test(NAME sound_smoke
+             COMMAND $<TARGET_FILE:doomcpp> --soundtest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
 endif()

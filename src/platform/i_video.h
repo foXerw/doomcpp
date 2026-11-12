@@ -11,6 +11,10 @@ struct Input {
     bool fire=false;        // P5b: held Ctrl fires the ready weapon
     bool use=false;         // P6a: edge-triggered Space opens doors/uses switches
     int  weaponSwitch=-1;   // P5b: edge-triggered weapon slot (1..8 -> weapontype or -1)
+    bool enter=false;       // P7: edge-triggered Enter (intermission/death continue)
+    bool save=false;        // P7: edge-triggered F5 quick save
+    bool load=false;        // P7: edge-triggered F9 quick load
+    bool run=false;         // P7: Shift = run (vanilla forwardmove 50 vs 25)
 };
 
 namespace i_video {

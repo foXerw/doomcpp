@@ -1,5 +1,6 @@
 #include "p_mobj.h"
 #include "p_tick.h"
+#include "p_enemy.h"        // P_MobjAction / P_SkullFly (P6b)
 #include "p_inter.h"        // P_DamageMobj (missile impacts)
 #include "p_maputl.h"
 #include "p_setup.h"
@@ -10,13 +11,9 @@
 #include <cstring>
 
 namespace {
-// Mobjs whose state carries A_Explode/A_BFGSpray apply radius damage on state entry.
+// State-entry dispatch: AI actions (P6b) + explosions + screams.
 void P_DoMobjAction(World& w, mobj_t& mo, action_t action) {
-    switch (action) {
-    case A_Explode:   P_RadiusAttack(w, mo, 128); break;
-    case A_BFGSpray:  if (mo.info) P_RadiusAttack(w, mo, mo.info->damage); break;
-    default:          break;   // AI/sound actions are P6/P7
-    }
+    P_MobjAction(w, mo, action);
 }
 
 // Missile impact: stop moving, drop MF_MISSILE, enter the explosion/death state (which
@@ -42,9 +39,9 @@ fixed_t apx(fixed_t dx, fixed_t dy) {
 }
 } // namespace
 
-// Vanilla p_mobj.c::P_XYMovement：按 MAXMOVE 分步走 P_TryMove，撞墙即停；之后摩擦（每 tic 衰减，
-// 小于 STOPSPEED 直接归零）。注意碰撞判据是位置——动量可能非零但被墙挡住逐 tic 衰减。
-static void P_XYMovement(World& w, mobj_t& mo) {
+// Vanilla p_mobj.c::P_XYMovement：按 MAXMOVE 分步走 P_TryMove；撞墙时沿阻挡线滑一次（玩家手感），
+// 之后摩擦（每 tic 衰减，小于 STOPSPEED 直接归零）。注意碰撞判据是位置——动量可能非零但被挡逐 tic 衰减。
+void P_XYMovement(World& w, mobj_t& mo) {
     fixed_t xleft = mo.momx, yleft = mo.momy;
     while (xleft != 0 || yleft != 0) {
         fixed_t xl = xleft, yl = yleft;
@@ -54,7 +51,14 @@ static void P_XYMovement(World& w, mobj_t& mo) {
             xl = FixedMul(xl, s);
             yl = FixedMul(yl, s);
         }
-        if (!P_TryMove(*w.map, *w.bm, mo, mo.x + xl, mo.y + yl)) break;   // 撞墙：停
+        if (!P_TryMove(w, mo, mo.x + xl, mo.y + yl)) {
+            // Blocked: non-missiles slide along the blocking wall with the remaining
+            // momentum (vanilla P_SlideMove). Projectiles must stop so the caller can
+            // explode them on contact.
+            if (!(mo.flags & MF_MISSILE) && (xleft || yleft))
+                P_SlideMove(w, mo, xleft, yleft);
+            break;
+        }
         xleft -= xl;
         yleft -= yl;
         if (xl == 0 && yl == 0) break;
@@ -78,7 +82,14 @@ static void P_ZMovement(const World& w, mobj_t& mo) {
 }
 
 void P_MobjThinker(World& w, mobj_t& mo) {
-    if (mo.flags & MF_MISSILE) {
+    const bool isPlayer = (&mo == w.player.mo);
+    if (isPlayer) {
+        // Movement/physics for the player are driven by P_MovePlayerWorld (vanilla
+        // P_PlayerThink). Integrating momentum here too would double the speed; only
+        // the state chain (pain/death animation) advances below.
+    } else if (mo.flags & MF_SKULLFLY) {
+        P_SkullFly(w, mo);                       // lost soul charge (P6b)
+    } else if (mo.flags & MF_MISSILE) {
         const fixed_t ox = mo.x, oy = mo.y;
         const bool hadMom = (mo.momx || mo.momy);
         if (hadMom) P_XYMovement(w, mo);
@@ -126,6 +137,7 @@ mobj_t* P_SpawnMobj(World& w, fixed_t x, fixed_t y, fixed_t z, mobjtype_t type) 
     m.height = m.info->height;
     m.health = m.info->spawnhealth;
     m.flags = m.info->flags;
+    m.reactiontime = m.info->reactiontime;
     P_SetMobjState(m, m.info->spawnstate);
     P_SetThingPosition(w, m);
     // Seed floor/ceiling from the spawn sector so gravity/ceiling clamps are sane before the

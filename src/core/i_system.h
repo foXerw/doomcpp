@@ -10,3 +10,9 @@ void I_Printf(std::string_view msg);
 // Fatal error: logs the message then throws std::runtime_error to unwind
 // back to main(), where it is caught and the program exits non-zero.
 [[noreturn]] void I_Error(std::string_view msg);
+
+// P7 audio indirection: doomcore calls I_StartSound, but only the platform layer
+// (SDL) installs a hook. With no hook installed (unit tests) sounds are no-ops.
+using SoundHook = void (*)(int id, int volume);
+void I_SetSoundHook(SoundHook hook);
+void I_StartSound(int id, int volume = 127);
