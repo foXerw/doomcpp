@@ -497,6 +497,13 @@ void P_MovePlayerWorld(World& w, player_t& p, fixed_t forward, fixed_t strafe, a
 
 void P_CalcHeight(const MapData& m, player_t& p) {
     if (!p.mo) return;
+    // The feet sit on the support: P_TryMove already rejected anything the player cannot
+    // reach, and there is no jump or drop-off physics, so mo->z is mo->floorz. It must be
+    // refreshed here because mo->floorz changes with every move — leaving mo->z at the spawn
+    // height made every height-dependent test read a phantom player: thing blocking skipped
+    // (walk straight through barrels/monsters once off the spawn floor), and hitscan/missile
+    // vertical tests hit or missed at the wrong height (P8a, found while auditing E1M1 ledges).
+    p.mo->z = p.mo->floorz;
     // Vanilla view bob: eye rises slightly with horizontal momentum (capped at MAXBOB).
     fixed_t bob = 0;
     if (p.mo->z <= p.mo->floorz + (4 << FRACBITS)) {
