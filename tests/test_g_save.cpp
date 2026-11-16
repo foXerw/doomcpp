@@ -122,3 +122,43 @@ TEST_CASE("G_LoadGame rejects a bad magic and a map mismatch") {
     CHECK(lv == "E1M1");
     std::remove(SAVE);
 }
+
+TEST_CASE("A v2 save (before the power-up timers) still loads") {
+    MapData m = levelMap();
+    World w; w.map = &m; w.bm = &m.blockmap; w.mapName = "E1M1";
+    P_SetupLevel(w, m);
+    w.player.ammo[AM_SHELL] = 23;
+    w.player.powers[pw_strength] = 1;
+    w.player.powers[pw_invulnerability] = 500;
+    const std::string path = "doomcpp-v2-compat.dat";
+    REQUIRE(G_SaveGame(w, path));
+
+    // Pretend the file was written by the previous format: stamp version 2 and drop the
+    // power-up tail. Everything that predates the change must still come back, and the
+    // powers must read as "none" rather than failing the load outright.
+    std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
+    REQUIRE(static_cast<bool>(f));
+    f.seekg(4);
+    std::int32_t version = 0;
+    f.read(reinterpret_cast<char*>(&version), sizeof(version));
+    REQUIRE(version == 3);
+    f.seekp(4);
+    const std::int32_t oldVersion = 2;
+    f.write(reinterpret_cast<const char*>(&oldVersion), sizeof(oldVersion));
+    f.close();
+    {
+        std::ifstream in(path, std::ios::binary);
+        std::string all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        all.resize(all.size() - sizeof(std::int32_t) * NUMPOWERS);
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(all.data(), static_cast<std::streamsize>(all.size()));
+    }
+
+    World r; r.map = &m; r.bm = &m.blockmap; r.mapName = "E1M1";
+    P_SetupLevel(r, m);
+    REQUIRE(G_LoadGame(r, path));
+    CHECK(r.player.ammo[AM_SHELL] == 23);
+    CHECK(r.player.powers[pw_strength] == 0);
+    CHECK(r.player.powers[pw_invulnerability] == 0);
+    std::remove(path.c_str());
+}
