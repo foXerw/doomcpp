@@ -510,6 +510,8 @@ int main(int argc, char** argv) {
                             wanted.push_back(n);
                         }
                 int violations = 0, violMaps = 0, overlaps = 0, badSeeds = 0, crushes = 0;
+                std::map<int, int> overlapBy;                // doomednum -> overlap frames
+                int sameHeightOverlaps = 0;
                 for (const std::string& name : wanted) {
                     MapData map = loadMap(wad, name);
                     World w; w.map = &map; w.bm = &map.blockmap; w.mapName = name;
@@ -560,14 +562,21 @@ int main(int argc, char** argv) {
                         mo->subsector = R_PointInSubsector(map, mo->x, mo->y);
                         PosCheck at = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
                         const int sec0 = sectorOf(map, mo->subsector);
-                        if (!at.ok || sec0 < 0 ||
+                        mo->floorz = at.floorz; mo->ceilingz = at.ceilingz; mo->z = at.floorz;
+                        // Then refuse a seed that already shares space with a solid thing:
+                        // things are where monsters spawn, and dropping the player on top of
+                        // one would otherwise be counted as the walk having passed through it.
+                        // The height must be settled first, or the overlap test runs against
+                        // the previous seed's feet.
+                        if (!at.ok || !P_CheckPosition(w, *mo, mo->x, mo->y).ok || sec0 < 0 ||
                             map.sectors[sec0].floorheight + (mo->height >> FRACBITS) >
                             map.sectors[sec0].ceilingheight + 1) { ++badSeeds; continue; }
-                        mo->floorz = at.floorz; mo->ceilingz = at.ceilingz; mo->z = at.floorz;
                         w.player.viewz = mo->z + VIEWHEIGHT;
                         w.player.dead = false;
                         w.player.health = 100000; mo->health = 100000;   // monsters, not crushes
                         fixed_t lastx = mo->x, lasty = mo->y;
+                        fixed_t preX = mo->x, preY = mo->y;
+                        int events = 0;
                         int stuck = 0, leg = 0, turnFor = 0, turnDir = 1;
                         for (int t = 0; t < steps; ++t) {
                             // Keep the soak alive: monsters and crushing floors would
@@ -589,6 +598,7 @@ int main(int argc, char** argv) {
                             }
                             if (turnFor > 0) { trn = turnDir; --turnFor; }
                             ++leg; ++walked;
+                            preX = mo->x; preY = mo->y;
                             P_MovePlayerWorld(w, w.player,
                                               fwd * ((next() % 4) ? walkThrust : runThrust),
                                               str * walkSide, trn * turnSpeed);
@@ -641,7 +651,50 @@ int main(int argc, char** argv) {
                             // ledge onto a monster that was standing under you legitimately
                             // overlaps it.
                             PosCheck all = P_CheckPosition(w, *mo, mo->x, mo->y);
-                            if (walls.ok && !all.ok) { ++overlaps; ++thisMapOverlaps; }
+                            if (walls.ok && !all.ok && events < 3) {
+                                // Who moved in? The player's own step this tic, versus the
+                                // monsters' thinker moves that ran after it.
+                                ++events;
+                                for (const mobj_t& th : w.mobjs) {
+                                    if (&th == mo || th.removePending || !(th.flags & MF_SOLID)) continue;
+                                    const fixed_t tr = th.info ? th.info->radius : 0;
+                                    const fixed_t thh = th.height ? th.height : (th.info ? th.info->height : 0);
+                                    const fixed_t r = mo->info ? mo->info->radius : 0;
+                                    const fixed_t mh = mo->height ? mo->height : (mo->info ? mo->info->height : 0);
+                                    if (std::abs(th.x - mo->x) >= r + tr || std::abs(th.y - mo->y) >= r + tr) continue;
+                                    if (mo->z >= th.z + thh || mo->z + mh <= th.z) continue;
+                                    std::printf("    EVENT seed=(%d,%d) tic=%d player=(%d,%d,z=%d,mom=(%d,%d)) "
+                                                "moved=(%d,%d) thing dn=%d at (%d,%d,z=%d) mom=(%d,%d) flags=%d\n",
+                                                sp.first, sp.second, t, mo->x >> FRACBITS, mo->y >> FRACBITS,
+                                                mo->z >> FRACBITS, mo->momx >> FRACBITS, mo->momy >> FRACBITS,
+                                                (mo->x - preX) >> FRACBITS, (mo->y - preY) >> FRACBITS,
+                                                th.info ? th.info->doomednum : -1,
+                                                th.x >> FRACBITS, th.y >> FRACBITS, th.z >> FRACBITS,
+                                                th.momx >> FRACBITS, th.momy >> FRACBITS, th.flags);
+                                    break;
+                                }
+                            }
+                            if (walls.ok && !all.ok) {
+                                ++overlaps; ++thisMapOverlaps;
+                                // Which thing, and is the overlap explainable by a height
+                                // change (walking off a ledge onto something) rather than a
+                                // collision miss? Count per doomednum, report the worst.
+                                for (const mobj_t& th : w.mobjs) {
+                                    if (&th == mo || th.removePending || !(th.flags & MF_SOLID)) continue;
+                                    const fixed_t tr = th.info ? th.info->radius : 0;
+                                    const fixed_t thh = th.height ? th.height : (th.info ? th.info->height : 0);
+                                    const fixed_t r = mo->info ? mo->info->radius : 0;
+                                    const fixed_t mh = mo->height ? mo->height : (mo->info ? mo->info->height : 0);
+                                    if (std::abs(th.x - mo->x) >= r + tr || std::abs(th.y - mo->y) >= r + tr) continue;
+                                    if (mo->z >= th.z + thh || mo->z + mh <= th.z) continue;
+                                    ++overlapBy[th.info ? th.info->doomednum : -1];
+                                    // Same support height means the two bodies really do
+                                    // occupy the same space; a different one is the ledge
+                                    // case vanilla's vertical test allows.
+                                    if (std::abs(th.z - mo->z) < (8 << FRACBITS)) ++sameHeightOverlaps;
+                                    break;
+                                }
+                            }
                             // 3. no room means a mover closed onto the player. Vanilla
                             // crushes it (P_RunMovers -> P_DamageMobj), so the position is
                             // only acceptable once that damage has actually been applied —
@@ -674,8 +727,18 @@ int main(int argc, char** argv) {
                 }
                 std::cout << "CLIPAUDIT " << (violations ? "FAILED" : "PASSED") << " ("
                           << violations << " violations in " << violMaps << " maps, "
-                          << overlaps << " benign thing overlaps, " << badSeeds
-                          << " seeds inside geometry)\n";
+                          << overlaps << " thing overlaps (" << sameHeightOverlaps
+                          << " ending at equal height: the vanilla descent-onto-a-monster "
+                          "case, pinned by the thing-blocking unit tests), " << badSeeds
+                          << " seeds inside geometry, " << crushes << " crush deaths)\n";
+                std::vector<std::pair<int, int>> worst(overlapBy.begin(), overlapBy.end());
+                std::sort(worst.begin(), worst.end(),
+                          [](const std::pair<int, int>& a, const std::pair<int, int>& b)
+                          { return a.second > b.second; });
+                std::cout << "  overlap offenders (doomednum x frames):";
+                for (size_t k = 0; k < std::min<size_t>(6, worst.size()); ++k)
+                    std::cout << " " << worst[k].first << "x" << worst[k].second;
+                std::cout << "\n";
                 return violations ? 1 : 0;
             }
             if (std::string(argv[i]) == "--assetaudit" && i + 1 < argc) {

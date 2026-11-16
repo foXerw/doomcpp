@@ -6,6 +6,7 @@
 #include "play/p_tick.h"
 #include "play/info.h"
 #include "core/m_tables.h"
+#include "core/m_fixed.h"
 #include <cstdlib>
 
 namespace {
@@ -204,4 +205,34 @@ TEST_CASE("P_CalcHeight: a foot-height shot hits a player who stepped down") {
     mobj_t* hit = P_LineAttack(w, shooter, shooter->x, shooter->y, F(41),
                                ANG180, 0, 5);
     CHECK(hit == mo);                                    // the shot is at the player's height
+}
+
+TEST_CASE("thing blocking: a monster walking at the player stops at the boundary") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;                       // player on the ledge at (100,100)
+    mobj_t* mon = P_SpawnMobj(w, F(300), F(100), F(128), MT_POSSESSED);
+    mon->floorz = F(128); mon->z = F(128);
+    mon->angle = ANG180;                            // facing -X, toward the player
+    int steps = 0;
+    while (steps < 200) {
+        const int fi = static_cast<int>((mon->angle >> ANGLETOFINESHIFT) & FINEMASK);
+        if (!P_TryMove(w, *mon, mon->x + FixedMul(finecosine[fi], mon->info->speed),
+                              mon->y + FixedMul(finesine[fi], mon->info->speed))) break;
+        ++steps;
+    }
+    const fixed_t gap = std::abs(mon->x - mo->x);
+    CHECK(steps > 0);                               // it did approach
+    // radii 16 + 20: it must stop before their boxes overlap, not end up inside.
+    CHECK(gap >= (36 << FRACBITS) - (2 << FRACBITS));
+}
+
+TEST_CASE("thing blocking: the player walking into a standing monster stops") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;
+    mobj_t* mon = P_SpawnMobj(w, F(300), F(100), 0, MT_POSSESSED);
+    mon->floorz = 0; mon->z = 0; mon->ceilingz = F(256);
+    mo->x = F(200); mo->y = F(100); mo->floorz = 0; mo->ceilingz = F(256);
+    P_CalcHeight(*w.map, w.player);
+    CHECK_FALSE(P_TryMove(w, *mo, F(290), F(100)));  // 10 units from the monster's centre
+    CHECK(P_TryMove(w, *mo, F(250), F(100)));        // 50 apart: still clear
 }
