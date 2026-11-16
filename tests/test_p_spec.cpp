@@ -261,3 +261,67 @@ TEST_CASE("A mover that leaves no room crushes what is inside the sector") {
     CHECK(w.player.dead);                                 // crushed, not left inside geometry
     CHECK(mo->health <= 0);
 }
+
+// ---- P8b: teleport to the other side of a line (verified from the IWAD: every such
+// line has its landing thing inside the sector on the far side, and none inside a
+// tag-matched sector, so the tag is not what selects the destination) ----
+
+namespace {
+// Room A (x<0) | line at x=0 carrying `special` | Room B (x>0) holding the landing pad.
+MapData teleportMap(int special) {
+    MapData m;
+    m.vertices.push_back({0, SF(-500)});
+    m.vertices.push_back({0, SF(500)});
+    line_t L; L.v1 = 0; L.v2 = 1; L.flags = ML_TWOSIDED; L.special = special; L.tag = 7;
+    L.sidenum[0] = 0; L.sidenum[1] = 1; m.lines.push_back(L);
+    side_t sA; sA.sector = 1; m.sides.push_back(sA);          // side 0 faces +x = room B
+    side_t sB; sB.sector = 0; m.sides.push_back(sB);          // side 1 faces -x = room A
+    sector_t A; A.floorheight = 0; A.ceilingheight = 128; A.tag = 0; m.sectors.push_back(A);
+    sector_t B; B.floorheight = 0; B.ceilingheight = 128; B.tag = 7; m.sectors.push_back(B);
+    seg_t g; g.linedef = 0; g.side = 0; g.frontsector = 1; g.backsector = 0; m.segs.push_back(g);
+    subsector_t ss; ss.segcount = 1; ss.firstseg = 0; m.subsectors.push_back(ss);
+    m.things.push_back({-100, 0, 0, 1});                      // player start in room A
+    m.things.push_back({200, 50, 90, 14});                    // landing pad in room B
+    return m;
+}
+}  // namespace
+
+TEST_CASE("Teleport other side moves the player to the landing thing behind the line") {
+    MapData m = teleportMap(126);
+    World w; w.map = &m; w.bm = &m.blockmap; w.mapName = "TEST";
+    P_SetupLevel(w, m);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(mo);
+    mo->x = SF(-20); mo->y = 0;                                // standing at the line
+    mo->momx = SF(3);
+    P_ActivateLine(w, m.lines[0], mo);
+    CHECK(mo->x == SF(200));
+    CHECK(mo->y == SF(50));
+    CHECK(mo->momx == 0);                                     // momentum cleared
+}
+
+TEST_CASE("Teleport other side kills whatever is standing on the pad (telefrag)") {
+    MapData m = teleportMap(125);
+    World w; w.map = &m; w.bm = &m.blockmap; w.mapName = "TEST";
+    P_SetupLevel(w, m);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(mo);
+    mobj_t* victim = P_SpawnMobj(w, SF(200), SF(50), 0, MT_POSSESSED);
+    victim->floorz = 0;
+    mo->x = SF(-20); mo->y = 0;
+    P_ActivateLine(w, m.lines[0], mo);
+    CHECK(mo->x == SF(200));
+    CHECK((victim->health <= 0 || victim->removePending));
+}
+
+TEST_CASE("Crossing a walk-over teleport line triggers it once per crossing") {
+    MapData m = teleportMap(126);
+    World w; w.map = &m; w.bm = &m.blockmap; w.mapName = "TEST";
+    P_SetupLevel(w, m);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(mo);
+    mo->x = SF(100); mo->y = SF(100);                          // already in room B
+    P_CrossSpecialLines(w, *mo, SF(-30), 0);                   // stepped across the line
+    CHECK(mo->x == SF(200));
+    CHECK(mo->y == SF(50));
+}

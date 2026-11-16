@@ -5,6 +5,8 @@
 #include "core/m_tables.h"
 #include "core/i_system.h"
 #include "play/sfx.h"
+#include "p_inter.h"      // P_DamageMobj (telefrag)
+#include "p_map.h"        // VIEWHEIGHT
 #include "p_inter.h"   // P_DamageMobj (crush)
 #include <algorithm>
 #include <cmath>
@@ -161,7 +163,9 @@ int keyForSpecial(int special) {
     }
 }
 
-// 1 = use (Space), 2 = walk-over trigger.
+// Bitmask: 1 = usable (Space within reach), 2 = triggered by crossing. A teleport line
+// can be both: in the IWAD some 125/126 lines are buttons set in a wall (the opening is
+// blocked) and some are pads you walk onto.
 int triggerFor(int special) {
     switch (special) {
     case 1: case 26: case 27: case 28: case 31: case 32: case 33: case 34:
@@ -176,6 +180,8 @@ int triggerFor(int special) {
     case 58: case 82: case 88: case 92: case 97:
     case 100: case 119: case 120: case 127: case 130: case 131:
         return 2;
+    case 125: case 126:            // teleport to the other side of this line
+        return 1 | 2;
     default:
         return 0;
     }
@@ -196,6 +202,74 @@ bool swapSwitchTextures(MapData& m, const line_t& L) {
         return true;   // only the first matching side
     }
     return false;
+}
+
+// The sector on the side of the line the mover is NOT in (a door, or a teleport
+// destination, lives there). Falls back to the back sidedef when the mover is null.
+int otherSideOfMover(const MapData& m, const line_t& L, const mobj_t* who) {
+    int front = sideSector(m, L, 0), back = sideSector(m, L, 1);
+    if (front < 0 || back < 0 || !who ||
+        L.v1 < 0 || L.v2 < 0 ||
+        L.v1 >= static_cast<int>(m.vertices.size()) ||
+        L.v2 >= static_cast<int>(m.vertices.size()))
+        return back >= 0 ? back : front;
+    const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;
+    const double ay = static_cast<double>(m.vertices[L.v1].y) / FRACUNIT;
+    const double bx = static_cast<double>(m.vertices[L.v2].x) / FRACUNIT;
+    const double by = static_cast<double>(m.vertices[L.v2].y) / FRACUNIT;
+    const double px = static_cast<double>(who->x) / FRACUNIT;
+    const double py = static_cast<double>(who->y) / FRACUNIT;
+    const bool onFront = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) < 0;
+    return onFront ? back : front;
+}
+
+// Teleport to the other side of this line: vanilla picks the nearest teleport landing
+// thing inside the sector behind the line (not a tag-matched one -- verified against
+// the IWAD, where every such line has its landing thing behind it and none in a sector
+// carrying its tag). Anything standing on the pad is telefragged.
+bool teleportOtherSide(World& w, const line_t& L, mobj_t& mo) {
+    if (!w.map) return false;
+    // Two authoring shapes exist in the IWAD: a button set in a wall (the landing pad is
+    // the sector on the far side) and a floor pad you walk onto (by the time the crossing
+    // fires, the mover is already standing in the landing sector). Try the far side first,
+    // then the mover's own side.
+    int cand[2] = { otherSideOfMover(*w.map, L, &mo), sideSector(*w.map, L, 0) };
+    const int here = sectorOf(*w.map, R_PointInSubsector(*w.map, mo.x, mo.y));
+    cand[1] = (cand[1] == cand[0]) ? here : cand[1];
+    const thing_t* best = nullptr;
+    int sec = -1;
+    fixed_t bestDist = 0x7fffffff;
+    for (int pass = 0; pass < 2 && !best; ++pass) {
+        const int trySec = cand[pass];
+        if (trySec < 0) continue;
+        for (const thing_t& th : w.map->things) {
+            if (th.type != 14) continue;
+            const fixed_t x = static_cast<fixed_t>(th.x) << FRACBITS;
+            const fixed_t y = static_cast<fixed_t>(th.y) << FRACBITS;
+            if (sectorOf(*w.map, R_PointInSubsector(*w.map, x, y)) != trySec) continue;
+            const fixed_t dd = std::abs(x - mo.x) + std::abs(y - mo.y);
+            if (dd < bestDist) { bestDist = dd; best = &th; sec = trySec; }
+        }
+    }
+    if (!best || sec < 0) return false;
+    const fixed_t dx = static_cast<fixed_t>(best->x) << FRACBITS;
+    const fixed_t dy = static_cast<fixed_t>(best->y) << FRACBITS;
+    // Telefrag: whatever occupies the landing spot dies (vanilla P_TeleportMove).
+    for (mobj_t& th : w.mobjs) {
+        if (&th == &mo || th.removePending || !(th.flags & MF_SHOOTABLE)) continue;
+        if (std::abs(th.x - dx) > (16 << FRACBITS) || std::abs(th.y - dy) > (16 << FRACBITS)) continue;
+        P_DamageMobj(w, th, nullptr, 10000);
+    }
+    mo.x = dx; mo.y = dy;
+    mo.momx = mo.momy = mo.momz = 0;
+    mo.angle = degreesToBam(best->angleDeg);
+    mo.subsector = R_PointInSubsector(*w.map, dx, dy);
+    mo.floorz   = static_cast<fixed_t>(w.map->sectors[sec].floorheight)   << FRACBITS;
+    mo.ceilingz = static_cast<fixed_t>(w.map->sectors[sec].ceilingheight) << FRACBITS;
+    mo.z = mo.floorz;
+    if (w.player.mo == &mo) w.player.viewz = mo.floorz + VIEWHEIGHT;
+    I_StartSound(SFX_TELEPT);
+    return true;
 }
 
 bool teleportPlayer(World& w, mobj_t& mo, int tag) {
@@ -290,7 +364,7 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
         return;   // locked
     }
 
-    if (triggerFor(L.special) == 1 && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
+    if ((triggerFor(L.special) & 1) && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
         I_StartSound(SFX_SWTCHN);
 
     const int front = sideSector(*w.map, L, 0);
@@ -408,6 +482,9 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     case 39: case 97:
         if (who) teleportPlayer(w, *who, L.tag);
         break;
+    case 125: case 126:
+        if (who) teleportOtherSide(w, L, *who);
+        break;
     // ---- level exits (P7 campaign flow) ----
     case 11: case 52:
         w.levelExitRequested = true;
@@ -441,7 +518,7 @@ void P_UseLines(World& w, mobj_t& mo) {
     const MapData& m = *w.map;
     for (int i = 0; i < static_cast<int>(m.lines.size()); ++i) {
         const line_t& L = m.lines[i];
-        if (triggerFor(L.special) != 1) continue;
+        if (!(triggerFor(L.special) & 1)) continue;
         if (L.v1 < 0 || L.v2 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
             L.v2 >= static_cast<int>(m.vertices.size())) continue;
         const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;
@@ -470,7 +547,7 @@ void P_CrossSpecialLines(World& w, mobj_t& mo, fixed_t oldx, fixed_t oldy) {
     const MapData& m = *w.map;
     for (int i = 0; i < static_cast<int>(m.lines.size()); ++i) {
         const line_t& L = m.lines[i];
-        if (triggerFor(L.special) != 2) continue;
+        if (!(triggerFor(L.special) & 2)) continue;
         if (L.v1 < 0 || L.v2 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
             L.v2 >= static_cast<int>(m.vertices.size())) continue;
         const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;
