@@ -3,6 +3,7 @@
 #include "play/p_mobj.h"
 #include "play/info.h"
 #include "play/p_setup.h"
+#include "play/p_spec.h"   // P_InitLights
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -247,6 +248,7 @@ bool G_LoadGame(World& w, const std::string& path) {
         }
     }
     w.player = p;
+    P_InitLights(w);   // P8b: rebuild the animated-light list from the sector types
     return true;
 }
 

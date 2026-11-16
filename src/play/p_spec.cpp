@@ -312,6 +312,65 @@ void P_LowerFloorByTag(World& w, int tag) {
     });
 }
 
+// ---- P8b sector light specials ----
+//
+// Vanilla drives these from three thinker shapes (glow / flash / strobe). The sector's
+// authored lightlevel is the bright end; the dark end is the same distance below it that
+// vanilla's tables use (84 units), clamped so a dark sector never goes black. Doomcpp's
+// own periods, chosen to read as "breathing", "flashing" and "strobing" at 35 tics/s.
+namespace {
+bool isGlow(int sp)    { return sp == 13 || sp == 14; }
+bool isFlash(int sp)   { return sp == 5 || sp == 6 || sp == 7 || sp == 8; }
+bool isStrobe(int sp)  { return sp == 10 || sp == 11 || sp == 12 || sp == 17; }
+int  darkEnd(int base) { return base > 116 ? base - 84 : 32; }
+}  // namespace
+
+void P_InitLights(World& w) {
+    w.lights.clear();
+    if (!w.map) return;
+    for (int i = 0; i < static_cast<int>(w.map->sectors.size()); ++i) {
+        const sector_t& s = w.map->sectors[i];
+        if (!isGlow(s.special) && !isFlash(s.special) && !isStrobe(s.special)) continue;
+        LightSpecial ls;
+        ls.sector = i; ls.base = s.lightlevel; ls.special = s.special;
+        ls.tics = isGlow(s.special) ? 8 : (isFlash(s.special) ? (s.special <= 6 ? 12 : 8) : 8);
+        ls.step = 0;
+        w.lights.push_back(ls);
+    }
+}
+
+void P_RunLights(World& w) {
+    if (!w.map) return;
+    for (LightSpecial& ls : w.lights) {
+        if (ls.sector < 0 || ls.sector >= static_cast<int>(w.map->sectors.size())) continue;
+        sector_t& s = w.map->sectors[ls.sector];
+        const int dark = darkEnd(ls.base);
+        if (isGlow(ls.special)) {
+            // ease between the bright and dark end, 3 units per period
+            if (--ls.tics <= 0) {
+                ls.tics = 8;
+                ls.step += (ls.step >= 0 && s.lightlevel >= ls.base) ? -1 : 1;
+                int next = s.lightlevel + 3 * ls.step;
+                if (next >= ls.base) { next = ls.base; ls.step = -1; }
+                if (next <= dark)    { next = dark;  ls.step = 1; }
+                s.lightlevel = next;
+            }
+        } else if (isFlash(ls.special)) {
+            if (--ls.tics <= 0) {
+                ls.tics = (ls.special <= 6) ? 12 : 8;
+                s.lightlevel = (s.lightlevel >= ls.base) ? dark : ls.base;
+            }
+        } else {   // strobe: two bright flashes with long dark holds
+            if (--ls.tics <= 0) {
+                const bool bright = (ls.step % 2) == 0;
+                ls.tics = bright ? 8 : 100;
+                ls.step++;
+                s.lightlevel = bright ? ls.base : dark;
+            }
+        }
+    }
+}
+
 void P_RunMovers(World& w) {
     if (!w.map) return;
     for (Mover& mv : w.movers) {

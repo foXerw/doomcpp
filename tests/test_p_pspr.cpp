@@ -270,3 +270,65 @@ TEST_CASE("Berserk makes the fist hurt ten times as much") {
     CHECK(boosted >= 20);                            // 10x the same roll
     CHECK(boosted % 20 == 0);
 }
+
+// ---- P8b: hazard floors and sector light specials ----
+
+namespace {
+// One sector whose floor is `flat`, optionally with a sector special, player standing in it.
+MapData floorMap(const char* flat, int sectorSpecial) {
+    MapData m;
+    sector_t s; s.floorheight = 0; s.ceilingheight = 128; s.lightlevel = 160;
+    s.special = sectorSpecial;
+    std::snprintf(s.floorpic, sizeof(s.floorpic), "%s", flat);
+    std::snprintf(s.ceilingpic, sizeof(s.ceilingpic), "FLAT1");
+    m.sectors.push_back(s);
+    seg_t g; g.linedef = -1; g.side = 0; g.frontsector = 0; g.backsector = -1;
+    m.segs.push_back(g);
+    subsector_t ss; ss.segcount = 1; ss.firstseg = 0;
+    m.subsectors.push_back(ss);
+    return m;
+}
+}  // namespace
+
+TEST_CASE("Standing in toxic goo hurts; a radiation suit delays it") {
+    MapData m = floorMap("NUKAGE1", 0);
+    World w; w.map = &m; w.bm = &m.blockmap; setupPlayer(w, m);
+    int hp0 = w.player.health;
+    for (int i = 0; i < 70; ++i) tick(w, false);
+    CHECK(w.player.health < hp0);                     // took poison damage
+
+    MapData m2 = floorMap("NUKAGE1", 0);
+    World w2; w2.map = &m2; w2.bm = &m2.blockmap; setupPlayer(w2, m2);
+    w2.player.powers[pw_ironfeet] = 60 * 35;
+    const int hp = w2.player.health;
+    for (int i = 0; i < 70; ++i) tick(w2, false);
+    CHECK(w2.player.health == hp);                    // suited up: nothing yet
+}
+
+TEST_CASE("Lava burns faster than goo, and dry floors never hurt") {
+    MapData m = floorMap("LAVA1", 0);
+    World w; w.map = &m; w.bm = &m.blockmap; setupPlayer(w, m);
+    const int hp0 = w.player.health;
+    for (int i = 0; i < 40; ++i) tick(w, false);
+    CHECK(hp0 - w.player.health >= 8);
+
+    MapData dry = floorMap("FLAT1_1", 0);
+    World w2; w2.map = &dry; w2.bm = &dry.blockmap; setupPlayer(w2, dry);
+    const int h = w2.player.health;
+    for (int i = 0; i < 200; ++i) tick(w2, false);
+    CHECK(w2.player.health == h);
+}
+
+TEST_CASE("Sector light specials animate; ordinary sectors do not") {
+    MapData m = floorMap("FLAT1_1", 13);            // 13 = light pacing (glow)
+    World w; w.map = &m; w.bm = &m.blockmap; setupPlayer(w, m);
+    const int base = m.sectors[0].lightlevel;
+    bool changed = false;
+    for (int i = 0; i < 200; ++i) { tick(w, false); if (m.sectors[0].lightlevel != base) changed = true; }
+    CHECK(changed);
+
+    MapData still = floorMap("FLAT1_1", 0);
+    World w2; w2.map = &still; w2.bm = &still.blockmap; setupPlayer(w2, still);
+    for (int i = 0; i < 200; ++i) tick(w2, false);
+    CHECK(still.sectors[0].lightlevel == 160);        // untouched
+}

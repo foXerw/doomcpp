@@ -10,6 +10,11 @@ struct MapData;
 // Advance every active mover one tic (and carry things standing on the sector).
 void P_RunMovers(World& w);
 
+// P8b sector light specials: P_InitLights builds the animated set from the map's sector
+// types, P_RunLights advances them once per tic (call from P_RunThinkers).
+void P_InitLights(World& w);
+void P_RunLights(World& w);
+
 // Line specials: use (Space) and walk-over triggers.
 void P_ActivateLine(World& w, const line_t& L, mobj_t* who);
 void P_UseLines(World& w, player_t& p);

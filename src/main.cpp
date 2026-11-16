@@ -1038,6 +1038,35 @@ int main(int argc, char** argv) {
                     w.player.dead = false;
                 }
 
+                // P8b: sector light specials must actually move a lightlevel on the real
+                // map, and standing in a hazard flat must hurt through the live think path.
+                {
+                    int litSec = -1;
+                    for (size_t sI = 0; sI < map.sectors.size(); ++sI) {
+                        const int sp = map.sectors[sI].special;
+                        if (sp == 5 || sp == 6 || sp == 7 || sp == 8 || sp == 10 ||
+                            sp == 11 || sp == 12 || sp == 13 || sp == 14 || sp == 17) {
+                            litSec = static_cast<int>(sI); break;
+                        }
+                    }
+                    check(litSec >= 0, "the map has an animated-light sector");
+                    if (litSec >= 0) {
+                        const int before = map.sectors[litSec].lightlevel;
+                        for (int t = 0; t < 120; ++t) P_RunThinkers(w);
+                        check(map.sectors[litSec].lightlevel != before,
+                            "sector light special changes the lightlevel");
+                    }
+                    const int psec = sectorOf(map, w.player.mo->subsector);
+                    if (psec >= 0) {
+                        std::snprintf(map.sectors[psec].floorpic,
+                                      sizeof(map.sectors[psec].floorpic), "%s", "NUKAGE1");
+                        const int hp0 = w.player.health;
+                        for (int t = 0; t < 40; ++t) { P_PlayerThink(w, false, -1); P_RunThinkers(w); }
+                        check(w.player.health < hp0, "standing in toxic goo damages the player");
+                        w.player.health = hp0; w.player.mo->health = hp0;
+                    }
+                }
+
                 // P6a: synthetic door next to the player (room | closed door). Activate it and
                 // require the door sector's ceiling to rise; this exercises the real mover path.
                 {

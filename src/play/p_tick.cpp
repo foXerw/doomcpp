@@ -26,6 +26,7 @@ void P_SetupLevel(World& w, const MapData& m, const player_t* carry) {
     w.mobjs.clear();
     w.player.mo = nullptr;
     w.movers.clear();
+    w.lights.clear();
     w.levelExitRequested = false;
     w.secretExit = false;
     w.totalKills = 0;
@@ -33,6 +34,7 @@ void P_SetupLevel(World& w, const MapData& m, const player_t* carry) {
     w.totalSecrets = 0;
     w.secretFound.assign(m.sectors.size(), 0);
     for (const sector_t& s : m.sectors) if (s.special == 9) ++w.totalSecrets;
+    P_InitLights(w);   // P8b: sectors whose type animates their lightlevel
     for (const thing_t& th : m.things) {
         int mt = mobjtypeForDoomednum(th.type);
         if (mt == MT_PLAYER) {
@@ -134,6 +136,7 @@ void P_RunThinkers(World& w) {
     w.thinkering = false;
     w.mobjs.remove_if([](const mobj_t& m) { return m.removePending; });
     P_RunMovers(w);   // P6a doors/lifts/floors/ceilings
+    P_RunLights(w);   // P8b sector glow / flash / strobe
 }
 
 mobj_t* P_TossBarrel(World& w) {
