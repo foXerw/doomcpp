@@ -6,6 +6,7 @@
 #include "play/p_tick.h"
 #include "play/info.h"
 #include "core/m_tables.h"
+#include "core/m_fixed.h"
 #include <cstdlib>
 
 namespace {
@@ -126,4 +127,112 @@ TEST_CASE("P_MovePlayer: walking into a wall does not cross it") {
     mo.angle = 0; fixed_t before = mo.x;
     P_MovePlayer(tm.m, tm.bm, pl, F(30),0,0);
     CHECK(mo.x < F(270)); CHECK(mo.x >= before);
+}
+
+// ---- P8a: the player's feet must follow the surface it stands on ----
+namespace {
+// Two sectors split by a two-sided line at x=200: the left one (where the player starts)
+// has floor 128, the right one floor 0 -- a ledge the player can walk off (MF_DROPOFF).
+// A real two-leaf BSP is needed because P_CheckPosition takes the point's own sector floor.
+struct LedgeMap { MapData m; Blockmap bm; };
+static LedgeMap buildLedgeMap() {
+    LedgeMap lm; auto& m = lm.m;
+    m.vertices.push_back({F(200), F(0)});
+    m.vertices.push_back({F(200), F(400)});
+    line_t L; L.v1 = 0; L.v2 = 1; L.flags = ML_TWOSIDED; L.special = 0; L.tag = 0;
+    L.sidenum[0] = 0; L.sidenum[1] = 1;
+    side_t s0; s0.sector = 0; m.sides.push_back(s0);
+    side_t s1; s1.sector = 1; m.sides.push_back(s1);
+    m.lines.push_back(L);
+    // side 0 of an upward-pointing line is its +x half, so seg g0 (frontsector A) is the
+    // right half and g1 (frontsector B) the left: the player starts on B's ledge and walks
+    // east onto A's floor.
+    sector_t A; A.floorheight = 0;   A.ceilingheight = 256; m.sectors.push_back(A);
+    sector_t B; B.floorheight = 128; B.ceilingheight = 256; m.sectors.push_back(B);
+    seg_t g0; g0.linedef = 0; g0.side = 0; g0.frontsector = 0; g0.backsector = 1;
+    seg_t g1; g1.linedef = 0; g1.side = 1; g1.frontsector = 1; g1.backsector = 0;
+    m.segs.push_back(g0); m.segs.push_back(g1);
+    subsector_t ss0; ss0.segcount = 1; ss0.firstseg = 0;   // right half  (x > 200)
+    subsector_t ss1; ss1.segcount = 1; ss1.firstseg = 1;   // left half   (x < 200)
+    m.subsectors.push_back(ss0); m.subsectors.push_back(ss1);
+    node_t n; n.x = F(200); n.y = F(0); n.dx = 0; n.dy = F(400);
+    n.children[0] = NF_SUBSECTOR | 0; n.children[1] = NF_SUBSECTOR | 1;
+    m.nodes.push_back(n);
+    Blockmap& bm = lm.bm; bm.orgx = 0; bm.orgy = 0; bm.width = 4; bm.height = 4;
+    bm.lump.assign(4, 0); bm.lump[2] = 4; bm.lump[3] = 4;
+    for (int i = 0; i < 16; ++i) bm.lump.push_back(20);   // every cell -> the one list
+    bm.lump.push_back(0); bm.lump.push_back(-1);          // list: line 0, terminator
+    return lm;
+}
+// A live World whose player stands on the ledge at (100,100), z/floorz = 128 like spawn.
+static void ledgeWorld(LedgeMap& lm, World& w) {
+    R_InitTables();
+    w.map = &lm.m; w.bm = &lm.bm;
+    mobj_t* mo = P_SpawnMobj(w, F(100), F(100), F(128), MT_PLAYER);
+    mo->floorz = F(128); mo->ceilingz = F(256);
+    mo->angle = 0; mo->subsector = R_PointInSubsector(lm.m, F(100), F(100));
+    w.player.mo = mo; w.player.viewz = F(128 + 41); w.player.health = 100;
+}
+}  // namespace
+
+TEST_CASE("P_CalcHeight: feet follow the support the player moved onto") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(P_TryMove(w, *mo, F(300), F(100)));          // walk off the ledge
+    CHECK(mo->floorz == 0);                              // support dropped to the low floor
+    P_CalcHeight(*w.map, w.player);
+    CHECK(mo->z == 0);                                   // ... and the feet must drop with it
+}
+
+TEST_CASE("P_CalcHeight: a player who stepped down is blocked by a barrel on that floor") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(P_TryMove(w, *mo, F(250), F(100)));
+    P_CalcHeight(*w.map, w.player);
+    mobj_t* barrel = P_SpawnMobj(w, F(300), F(100), 0, MT_BARREL);
+    barrel->floorz = 0; barrel->ceilingz = F(256);
+    CHECK_FALSE(P_TryMove(w, *mo, F(300), F(100)));      // solid thing at foot height blocks
+}
+
+TEST_CASE("P_CalcHeight: a foot-height shot hits a player who stepped down") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;
+    REQUIRE(P_TryMove(w, *mo, F(300), F(100)));
+    P_CalcHeight(*w.map, w.player);
+    mobj_t* shooter = P_SpawnMobj(w, F(400), F(100), 0, MT_POSSESSED);
+    shooter->floorz = 0; shooter->z = 0;
+    shooter->angle = ANG180;                             // fires along -X at eye height
+    mobj_t* hit = P_LineAttack(w, shooter, shooter->x, shooter->y, F(41),
+                               ANG180, 0, 5);
+    CHECK(hit == mo);                                    // the shot is at the player's height
+}
+
+TEST_CASE("thing blocking: a monster walking at the player stops at the boundary") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;                       // player on the ledge at (100,100)
+    mobj_t* mon = P_SpawnMobj(w, F(300), F(100), F(128), MT_POSSESSED);
+    mon->floorz = F(128); mon->z = F(128);
+    mon->angle = ANG180;                            // facing -X, toward the player
+    int steps = 0;
+    while (steps < 200) {
+        const int fi = static_cast<int>((mon->angle >> ANGLETOFINESHIFT) & FINEMASK);
+        if (!P_TryMove(w, *mon, mon->x + FixedMul(finecosine[fi], mon->info->speed),
+                              mon->y + FixedMul(finesine[fi], mon->info->speed))) break;
+        ++steps;
+    }
+    const fixed_t gap = std::abs(mon->x - mo->x);
+    CHECK(steps > 0);                               // it did approach
+    // radii 16 + 20: it must stop before their boxes overlap, not end up inside.
+    CHECK(gap >= (36 << FRACBITS) - (2 << FRACBITS));
+}
+
+TEST_CASE("thing blocking: the player walking into a standing monster stops") {
+    LedgeMap lm = buildLedgeMap(); World w; ledgeWorld(lm, w);
+    mobj_t* mo = w.player.mo;
+    mobj_t* mon = P_SpawnMobj(w, F(300), F(100), 0, MT_POSSESSED);
+    mon->floorz = 0; mon->z = 0; mon->ceilingz = F(256);
+    mo->x = F(200); mo->y = F(100); mo->floorz = 0; mo->ceilingz = F(256);
+    P_CalcHeight(*w.map, w.player);
+    CHECK_FALSE(P_TryMove(w, *mo, F(290), F(100)));  // 10 units from the monster's centre
+    CHECK(P_TryMove(w, *mo, F(250), F(100)));        // 50 apart: still clear
 }

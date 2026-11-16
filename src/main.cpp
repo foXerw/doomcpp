@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -54,6 +56,34 @@ static void drawPlayerSprites(const World& w, const SpriteCache& sprites,
         char frame = static_cast<char>('A' + (ps.state->frame & FF_FRAMEMASK));
         R_DrawPSprite(fb, fw, fh, sprnames[ps.state->sprite], frame, ps.sx, ps.sy, sprites);
     }
+}
+
+// P8a diagnostics: is (x,y) really inside sector `sec`? Cast a +X ray and count the
+// sector's boundary edges (lines with the sector on exactly one side); odd = inside.
+// The BSP alone cannot answer this: a point in the void, or a thing standing inside a
+// wall, still resolves to some subsector and therefore to some sector, and rendering
+// from such a spot legitimately paints nothing. Without this filter the render audit
+// would report bogus poses as coverage holes.
+static bool insideSector(const MapData& m, int sec, int x, int y) {
+    int crossings = 0;
+    for (const line_t& L : m.lines) {
+        int a = -1, b = -1;
+        if (L.sidenum[0] >= 0 && L.sidenum[0] < static_cast<int>(m.sides.size()))
+            a = m.sides[L.sidenum[0]].sector;
+        if (L.sidenum[1] >= 0 && L.sidenum[1] < static_cast<int>(m.sides.size()))
+            b = m.sides[L.sidenum[1]].sector;
+        if ((a == sec) == (b == sec)) continue;             // not a boundary of this sector
+        if (L.v1 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
+            L.v2 < 0 || L.v2 >= static_cast<int>(m.vertices.size())) continue;
+        const double ax = m.vertices[L.v1].x / double(FRACUNIT);
+        const double ay = m.vertices[L.v1].y / double(FRACUNIT);
+        const double bx = m.vertices[L.v2].x / double(FRACUNIT);
+        const double by = m.vertices[L.v2].y / double(FRACUNIT);
+        if ((ay > y) == (by > y)) continue;
+        const double xi = ax + (y - ay) * (bx - ax) / (by - ay);
+        if (x < xi) ++crossings;
+    }
+    return (crossings & 1) != 0;
 }
 
 int main(int argc, char** argv) {
@@ -288,6 +318,67 @@ int main(int argc, char** argv) {
                           << t->width << "x" << t->height << ")\n";
                 return 0;
             }
+            if (std::string(argv[i]) == "--gapscan-map" && i + 3 < argc) {
+                // Like --gapscan but for an arbitrary map: <wad> <map> [angleDeg] [x y] [out.bmp]
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, argv[i + 2]);
+                TextureLookup tex(wad);
+                fixed_t px, py; angle_t ang;
+                if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
+                if (i + 3 < argc) ang = degreesToBam(std::atoi(argv[i + 3]));
+                if (i + 5 < argc) {
+                    px = static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS));
+                    py = static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS));
+                }
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                fixed_t eyeZ0 = (sec0 >= 0 ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS)
+                                           : 0) + VIEWHEIGHT;
+                std::printf("  camera sector %d floor=%d ceil=%d light=%d floorpic='%s' ceilpic='%s'\n",
+                            sec0, sec0 >= 0 ? map.sectors[sec0].floorheight : 0,
+                            sec0 >= 0 ? map.sectors[sec0].ceilingheight : 0,
+                            sec0 >= 0 ? map.sectors[sec0].lightlevel : 0,
+                            sec0 >= 0 ? map.sectors[sec0].floorpic : "?",
+                            sec0 >= 0 ? map.sectors[sec0].ceilingpic : "?");
+                auto renderGap = [&](bool forceOpaque) {
+                    R_SetForceOpaqueForDiagnostics(forceOpaque);
+                    R_SetSeamFillForDiagnostics(false);   // count real holes, not repaired seams
+                    R_RenderView(fb.data(), FW, FH, map, tex,
+                                 static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                                 bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
+                                 nullptr, nullptr, SENTINEL);
+                    R_SetForceOpaqueForDiagnostics(false);
+                    int total = 0, minCol = FW, maxCol = -1, minRow = FH, maxRow = -1;
+                    std::vector<int> rowGaps(FH, 0);
+                    for (int y = 0; y < FH; ++y)
+                        for (int x = 0; x < FW; ++x)
+                            if (fb[static_cast<size_t>(y) * FW + x] == SENTINEL) {
+                                ++total; ++rowGaps[y];
+                                minCol = std::min(minCol, x); maxCol = std::max(maxCol, x);
+                                minRow = std::min(minRow, y); maxRow = std::max(maxRow, y);
+                            }
+                    return std::make_tuple(total, rowGaps, minCol, maxCol, minRow, maxRow);
+                };
+                auto [total, rowGaps, minCol, maxCol, minRow, maxRow] = renderGap(false);
+                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                R_SetSeamFillForDiagnostics(true);
+                std::cout << "gapscan(" << argv[i + 2] << "): raw=" << total << " geometry=" << geom;
+                if (geom) std::cout << " geombbox=x[" << gMinCol << "," << gMaxCol
+                                    << "] y[" << gMinRow << "," << gMaxRow << "]";
+                std::cout << "\n";
+                if (total) std::cout << "  bbox=x[" << minCol << "," << maxCol << "] y[" << minRow
+                                    << "," << maxRow << "]\n";
+                std::vector<int> rows(FH);
+                for (int y = 0; y < FH; ++y) rows[y] = y;
+                std::sort(rows.begin(), rows.end(), [&](int a, int b){ return rowGaps[a] > rowGaps[b]; });
+                for (int k = 0; k < 10 && rowGaps[rows[k]] > 0; ++k)
+                    std::cout << "  row " << rows[k] << ": " << rowGaps[rows[k]] << "\n";
+                if (i + 6 < argc) writeBMP(argv[i + 6], fb.data(), FW, FH);
+                return geom ? 1 : 0;
+            }
             if (std::string(argv[i]) == "--gapscan" && i + 1 < argc) {
                 // Debug diagnostic: render one world-only frame (no sprites) over a
                 // magenta sentinel and count pixels no wall/plane covered. A non-zero
@@ -313,6 +404,7 @@ int main(int argc, char** argv) {
                                            : 0) + VIEWHEIGHT;
                 auto renderGap = [&](bool forceOpaque) {
                     R_SetForceOpaqueForDiagnostics(forceOpaque);
+                    R_SetSeamFillForDiagnostics(false);   // count real holes, not repaired seams
                     R_RenderView(fb.data(), FW, FH, map, tex,
                                  static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                                  bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
@@ -331,8 +423,12 @@ int main(int argc, char** argv) {
                 };
                 // Pass 1: raw sentinel count (geometry holes + transparent/masked-texel holes).
                 // Pass 2: transparent texels painted opaque -> counts only TRUE geometry holes.
-                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                // The force-opaque pass runs last so the optional BMP shows the geometry frame,
+                // which is what hole triage needs (the masked pass paints texel holes magenta
+                // and would be mistaken for missing geometry).
                 auto [total, rowGaps, minCol, maxCol, minRow, maxRow] = renderGap(false);
+                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                R_SetSeamFillForDiagnostics(true);
                 std::cout << "gapscan: raw=" << total << " geometry=" << geom;
                 if (geom) std::cout << " geombbox=x[" << gMinCol << "," << gMaxCol
                                     << "] y[" << gMinRow << "," << gMaxRow << "]";
@@ -345,6 +441,556 @@ int main(int argc, char** argv) {
                     std::cout << "  row " << rows[k] << ": " << rowGaps[rows[k]] << "\n";
                 if (i + 5 < argc) writeBMP(argv[i + 5], fb.data(), FW, FH);   // force-opaque frame
                 return 0;
+            }
+            if (std::string(argv[i]) == "--colprobe" && i + 6 < argc) {
+                // Diagnostics: trace which segs reach one screen column. Usage:
+                //   --colprobe <wad> <map> <angleDeg> <x> <y> <col>
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, argv[i + 2]);
+                TextureLookup tex(wad);
+                const angle_t ang = degreesToBam(std::atoi(argv[i + 3]));
+                const fixed_t px = static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS));
+                const fixed_t py = static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS));
+                const int col = std::atoi(argv[i + 6]);
+                const int sec = sectorOf(map, R_PointInSubsector(map, px, py));
+                const fixed_t eyeZ = (sec >= 0
+                    ? static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS : 0) + VIEWHEIGHT;
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                std::printf("camera sec=%d floor=%d ceil=%d eye=%d col=%d\n", sec,
+                            sec >= 0 ? map.sectors[sec].floorheight : 0,
+                            sec >= 0 ? map.sectors[sec].ceilingheight : 0,
+                            eyeZ >> FRACBITS, col);
+                R_SetColumnProbe(col);
+                R_SetSeamFillForDiagnostics(false);
+                R_SetForceOpaqueForDiagnostics(true);
+                R_RenderView(fb.data(), FW, FH, map, tex,
+                             static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                             bamToRendererRad(ang), static_cast<float>(eyeZ >> FRACBITS), 0,
+                             nullptr, nullptr, SENTINEL);
+                R_SetForceOpaqueForDiagnostics(false);
+                R_SetColumnProbe(-1);
+                int first = -1, last = -1;
+                for (int y = 0; y < FH; ++y)
+                    if (fb[static_cast<size_t>(y) * FW + col] == SENTINEL) {
+                        if (first < 0) first = y;
+                        last = y;
+                    }
+                std::printf("unpainted rows in col %d: %s\n", col,
+                            first < 0 ? "none"
+                                      : (std::to_string(first) + ".." + std::to_string(last)).c_str());
+                return 0;
+            }
+            if (std::string(argv[i]) == "--clipaudit" && i + 1 < argc) {
+                // P8a clipping audit: walk the REAL player around every map with a
+                // deterministic input soak and re-test the position the movement code ended
+                // up at. A position that the collision check itself would refuse means the
+                // player got somewhere it should not be — i.e. tunnelling through a wall,
+                // standing inside a solid thing, or being crushed into a floor.
+                // Usage: --clipaudit <wad> [map ...] [--steps N] [--every N] [--seeds N] [--seed S]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                int steps = 4000, every = 8, maxSeeds = 0;
+                uint32_t seed = 0x1234567u;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--steps" && k + 1 < argc)       steps = std::atoi(argv[++k]);
+                    else if (a == "--every" && k + 1 < argc)  every = std::atoi(argv[++k]);
+                    else if (a == "--seeds" && k + 1 < argc)  maxSeeds = std::atoi(argv[++k]);
+                    else if (a == "--seed" && k + 1 < argc)   seed = static_cast<uint32_t>(std::strtoul(argv[++k], nullptr, 10));
+                    else if (a.size() == 4 && a[0] == 'E')    wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                int violations = 0, violMaps = 0, overlaps = 0, badSeeds = 0, crushes = 0;
+                std::map<int, int> overlapBy;                // doomednum -> overlap frames
+                int sameHeightOverlaps = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    World w; w.map = &map; w.bm = &map.blockmap; w.mapName = name;
+                    P_SetupLevel(w, map);
+                    if (!w.player.mo) { std::cout << name << ": NO PLAYER START\n"; ++violMaps; continue; }
+                    uint32_t rng = seed;
+                    auto next = [&rng]() {                   // xorshift, deterministic per seed
+                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng;
+                    };
+                    const fixed_t walkThrust = 25 * 2048, runThrust = 50 * 2048;
+                    const fixed_t walkSide = 24 * 2048;
+                    const angle_t turnSpeed = degreesToBam(4);
+                    // Seeds: every map thing, spread over a grid so a map with 400 barrels in
+                    // one room does not soak all its budget there, plus the player start.
+                    // A single random walk explores ~2% of a map's sectors (it presses into the
+                    // first corner and stays), which proves too little; starting a short walk
+                    // from each of dozens of mapper-placed spots covers the real floor space.
+                    std::map<std::pair<int,int>, int> byCell;
+                    for (size_t t = 0; t < map.things.size(); ++t)
+                        byCell[{map.things[t].x / 512, map.things[t].y / 512}] = static_cast<int>(t);
+                    std::vector<std::pair<int,int>> seeds;
+                    fixed_t sx0, sy0; angle_t sa0;
+                    if (playerStart(map, sx0, sy0, sa0))
+                        seeds.push_back({sx0 >> FRACBITS, sy0 >> FRACBITS});
+                    for (auto& kv : byCell) {
+                        const thing_t& th = map.things[kv.second];
+                        seeds.push_back({th.x, th.y});
+                    }
+                    // A gate run wants a bounded cost; a deep run leaves maxSeeds at 0.
+                    if (maxSeeds > 0 && static_cast<int>(seeds.size()) > maxSeeds) {
+                        std::vector<std::pair<int,int>> few;
+                        const size_t str = (seeds.size() + maxSeeds - 1) / maxSeeds;
+                        for (size_t k = 0; k < seeds.size(); k += str) few.push_back(seeds[k]);
+                        seeds = few;
+                    }
+                    int thisMapViolations = 0, thisMapOverlaps = 0, checked = 0, walked = 0;
+                    std::set<int> visited;
+                    for (auto sp : seeds) {
+                        mobj_t* mo = w.player.mo;
+                        if (!mo) break;
+                        // Place the player there the way a teleport does: snap to the support,
+                        // kill momentum. A seed the wall collision refuses is not a place the
+                        // player can be (mappers do drop things inside walls), so it is
+                        // counted and skipped rather than reported as clipping.
+                        mo->x = static_cast<fixed_t>(sp.first) << FRACBITS;
+                        mo->y = static_cast<fixed_t>(sp.second) << FRACBITS;
+                        mo->momx = mo->momy = mo->momz = 0;
+                        mo->subsector = R_PointInSubsector(map, mo->x, mo->y);
+                        PosCheck at = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
+                        const int sec0 = sectorOf(map, mo->subsector);
+                        mo->floorz = at.floorz; mo->ceilingz = at.ceilingz; mo->z = at.floorz;
+                        // Then refuse a seed that already shares space with a solid thing:
+                        // things are where monsters spawn, and dropping the player on top of
+                        // one would otherwise be counted as the walk having passed through it.
+                        // The height must be settled first, or the overlap test runs against
+                        // the previous seed's feet.
+                        if (!at.ok || !P_CheckPosition(w, *mo, mo->x, mo->y).ok || sec0 < 0 ||
+                            map.sectors[sec0].floorheight + (mo->height >> FRACBITS) >
+                            map.sectors[sec0].ceilingheight + 1) { ++badSeeds; continue; }
+                        w.player.viewz = mo->z + VIEWHEIGHT;
+                        w.player.dead = false;
+                        w.player.health = 100000; mo->health = 100000;   // monsters, not crushes
+                        fixed_t lastx = mo->x, lasty = mo->y;
+                        fixed_t preX = mo->x, preY = mo->y;
+                        int events = 0;
+                        int stuck = 0, leg = 0, turnFor = 0, turnDir = 1;
+                        for (int t = 0; t < steps; ++t) {
+                            // Keep the soak alive: monsters and crushing floors would
+                            // otherwise end the walk after a few hundred tics.
+                            // A crush death is the mover doing the right thing; stop here
+                            // rather than continuing to probe a corpse.
+                            if (w.player.dead) { ++crushes; break; }
+                            int fwd = 1, str = 0, trn = 0;
+                            if (stuck > 3) {
+                                turnFor = 14; turnDir = (stuck % 8 < 4) ? 1 : -1;  // sweep out
+                                if (stuck % 7 == 0) P_UseLines(w, w.player);       // doors/switches
+                                if (stuck % 11 == 0) str = (stuck % 22 == 0) ? 1 : -1;
+                                if (stuck > 40) fwd = -1;                          // back off
+                                if (stuck > 70) stuck = 0;                         // retry
+                            } else if (leg > 150 || next() % 97 == 0) {
+                                turnFor = 10 + static_cast<int>(next() % 30);       // new heading
+                                turnDir = (next() % 2) ? 1 : -1;
+                                leg = 0;
+                            }
+                            if (turnFor > 0) { trn = turnDir; --turnFor; }
+                            ++leg; ++walked;
+                            preX = mo->x; preY = mo->y;
+                            P_MovePlayerWorld(w, w.player,
+                                              fwd * ((next() % 4) ? walkThrust : runThrust),
+                                              str * walkSide, trn * turnSpeed);
+                            // Feet on the support, checked before the movers run: a mover
+                            // that moves the floor afterwards legitimately leaves z one step
+                            // out of date until the next P_CalcHeight.
+                            if (t % every == 0 && w.player.mo &&
+                                w.player.mo->z != w.player.mo->floorz) {
+                                std::cout << "  VIOLATION " << name << " at ("
+                                          << (w.player.mo->x >> FRACBITS) << ","
+                                          << (w.player.mo->y >> FRACBITS) << ") z="
+                                          << (w.player.mo->z >> FRACBITS) << " floorz="
+                                          << (w.player.mo->floorz >> FRACBITS)
+                                          << " sec=" << sectorOf(map, w.player.mo->subsector)
+                                          << " secFloor="
+                                          << (sectorOf(map, w.player.mo->subsector) >= 0
+                                                  ? map.sectors[sectorOf(map, w.player.mo->subsector)]
+                                                        .floorheight : -9999)
+                                          << " viewz=" << (w.player.viewz >> FRACBITS)
+                                          << " movers=" << w.movers.size()
+                                          << " (off the support)\n";
+                                ++violations; ++thisMapViolations;
+                            }
+                            P_RunThinkers(w);
+                            mo = w.player.mo;
+                            if (!mo) break;
+                            if (std::abs(mo->x - lastx) < (2 << FRACBITS) &&
+                                std::abs(mo->y - lasty) < (2 << FRACBITS)) ++stuck;
+                            else stuck = 0;
+                            lastx = mo->x; lasty = mo->y;
+                            if (t % every) continue;
+                            ++checked;
+                            const int sec = sectorOf(map, mo->subsector);
+                            if (sec >= 0) visited.insert(sec);
+                            // 1. the position must not be one the WALL collision forbids:
+                            // straddling a one-sided line, an ML_BLOCKING line, or an opening
+                            // the player does not fit through means the walk got somewhere the
+                            // geometry says it cannot be.
+                            PosCheck walls = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
+                            if (!walls.ok) {
+                                std::cout << "  VIOLATION " << name << " at ("
+                                          << (mo->x >> FRACBITS) << "," << (mo->y >> FRACBITS)
+                                          << ") inside blocking line " << walls.blockedLine
+                                          << " (seed " << sp.first << "," << sp.second
+                                          << " tic " << t << ")\n";
+                                ++violations; ++thisMapViolations;
+                            }
+                            // 2. overlapping a solid thing is reported but not a failure:
+                            // vanilla uses the same vertical-clearance test, so walking off a
+                            // ledge onto a monster that was standing under you legitimately
+                            // overlaps it.
+                            PosCheck all = P_CheckPosition(w, *mo, mo->x, mo->y);
+                            if (walls.ok && !all.ok && events < 3) {
+                                // Who moved in? The player's own step this tic, versus the
+                                // monsters' thinker moves that ran after it.
+                                ++events;
+                                for (const mobj_t& th : w.mobjs) {
+                                    if (&th == mo || th.removePending || !(th.flags & MF_SOLID)) continue;
+                                    const fixed_t tr = th.info ? th.info->radius : 0;
+                                    const fixed_t thh = th.height ? th.height : (th.info ? th.info->height : 0);
+                                    const fixed_t r = mo->info ? mo->info->radius : 0;
+                                    const fixed_t mh = mo->height ? mo->height : (mo->info ? mo->info->height : 0);
+                                    if (std::abs(th.x - mo->x) >= r + tr || std::abs(th.y - mo->y) >= r + tr) continue;
+                                    if (mo->z >= th.z + thh || mo->z + mh <= th.z) continue;
+                                    std::printf("    EVENT seed=(%d,%d) tic=%d player=(%d,%d,z=%d,mom=(%d,%d)) "
+                                                "moved=(%d,%d) thing dn=%d at (%d,%d,z=%d) mom=(%d,%d) flags=%d\n",
+                                                sp.first, sp.second, t, mo->x >> FRACBITS, mo->y >> FRACBITS,
+                                                mo->z >> FRACBITS, mo->momx >> FRACBITS, mo->momy >> FRACBITS,
+                                                (mo->x - preX) >> FRACBITS, (mo->y - preY) >> FRACBITS,
+                                                th.info ? th.info->doomednum : -1,
+                                                th.x >> FRACBITS, th.y >> FRACBITS, th.z >> FRACBITS,
+                                                th.momx >> FRACBITS, th.momy >> FRACBITS, th.flags);
+                                    break;
+                                }
+                            }
+                            if (walls.ok && !all.ok) {
+                                ++overlaps; ++thisMapOverlaps;
+                                // Which thing, and is the overlap explainable by a height
+                                // change (walking off a ledge onto something) rather than a
+                                // collision miss? Count per doomednum, report the worst.
+                                for (const mobj_t& th : w.mobjs) {
+                                    if (&th == mo || th.removePending || !(th.flags & MF_SOLID)) continue;
+                                    const fixed_t tr = th.info ? th.info->radius : 0;
+                                    const fixed_t thh = th.height ? th.height : (th.info ? th.info->height : 0);
+                                    const fixed_t r = mo->info ? mo->info->radius : 0;
+                                    const fixed_t mh = mo->height ? mo->height : (mo->info ? mo->info->height : 0);
+                                    if (std::abs(th.x - mo->x) >= r + tr || std::abs(th.y - mo->y) >= r + tr) continue;
+                                    if (mo->z >= th.z + thh || mo->z + mh <= th.z) continue;
+                                    ++overlapBy[th.info ? th.info->doomednum : -1];
+                                    // Same support height means the two bodies really do
+                                    // occupy the same space; a different one is the ledge
+                                    // case vanilla's vertical test allows.
+                                    if (std::abs(th.z - mo->z) < (8 << FRACBITS)) ++sameHeightOverlaps;
+                                    break;
+                                }
+                            }
+                            // 3. no room means a mover closed onto the player. Vanilla
+                            // crushes it (P_RunMovers -> P_DamageMobj), so the position is
+                            // only acceptable once that damage has actually been applied —
+                            // otherwise the engine left the player standing inside geometry.
+                            if (sec >= 0 &&
+                                map.sectors[sec].floorheight + (mo->height >> FRACBITS) >
+                                map.sectors[sec].ceilingheight + 1) {
+                                const bool crushed = w.player.dead || mo->health <= 95000;
+                                std::cout << (crushed ? "  crush " : "  VIOLATION ") << name
+                                          << " at (" << (mo->x >> FRACBITS) << ","
+                                          << (mo->y >> FRACBITS) << ") "
+                                          << (crushed ? "crushed by a mover" : "no room, nothing applied")
+                                          << ": sector " << sec
+                                          << " floor=" << map.sectors[sec].floorheight
+                                          << " ceil=" << map.sectors[sec].ceilingheight << "\n";
+                                if (crushed) ++crushes;
+                                else { ++violations; ++thisMapViolations; }
+                                break;                     // this seed is finished either way
+                            }
+                            // (Support height is checked right after the move, above: a mover
+                            // that runs afterwards legitimately leaves floorz one step ahead
+                            // of the feet until the next P_CalcHeight.)
+                        }
+                    }
+                    if (thisMapViolations) ++violMaps;
+                    std::cout << name << ": seeds=" << seeds.size() << " tics=" << walked
+                              << " checked=" << checked
+                              << " sectorsVisited=" << visited.size() << "/" << map.sectors.size()
+                              << " violations=" << thisMapViolations << "\n";
+                }
+                std::cout << "CLIPAUDIT " << (violations ? "FAILED" : "PASSED") << " ("
+                          << violations << " violations in " << violMaps << " maps, "
+                          << overlaps << " thing overlaps (" << sameHeightOverlaps
+                          << " ending at equal height: the vanilla descent-onto-a-monster "
+                          "case, pinned by the thing-blocking unit tests), " << badSeeds
+                          << " seeds inside geometry, " << crushes << " crush deaths)\n";
+                std::vector<std::pair<int, int>> worst(overlapBy.begin(), overlapBy.end());
+                std::sort(worst.begin(), worst.end(),
+                          [](const std::pair<int, int>& a, const std::pair<int, int>& b)
+                          { return a.second > b.second; });
+                std::cout << "  overlap offenders (doomednum x frames):";
+                for (size_t k = 0; k < std::min<size_t>(6, worst.size()); ++k)
+                    std::cout << " " << worst[k].first << "x" << worst[k].second;
+                std::cout << "\n";
+                return violations ? 1 : 0;
+            }
+            if (std::string(argv[i]) == "--assetaudit" && i + 1 < argc) {
+                // P8a asset resolution audit. A name that does not resolve is not a missing
+                // detail — the renderer silently draws NOTHING for it, which reads to the
+                // player as a black hole or a see-through wall. So every flat and wall
+                // texture the maps reference must resolve, and every thing that spawns must
+                // have a mobj type whose sprite frames exist in the IWAD.
+                // Usage: --assetaudit <wad> [map ...]
+                WadFile wad(argv[i + 1]);
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                std::vector<std::string> wanted;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a.size() == 4 && a[0] == 'E') wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                std::set<std::string> badFlats, badWalls, badThings, badSprites;
+                int nSec = 0, nSide = 0, nThing = 0, markerThings = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    for (const sector_t& s : map.sectors) {
+                        ++nSec;
+                        for (const char* pic : {s.floorpic, s.ceilingpic}) {
+                            const std::string p = pic;
+                            if (TextureLookup::isSky(p)) continue;
+                            const Flat* fl = tex.flat(p);
+                            if (!fl) badFlats.insert("MISSING " + p + " (" + name + ")");
+                            else if (fl->rgba.empty()) badFlats.insert("EMPTY " + p + " (" + name + ")");
+                        }
+                    }
+                    // One-sided lines are the critical case: an empty texture there leaves a
+                    // see-through hole in the map shell, whereas an empty two-sided middle is
+                    // only a fence/grate that never got built.
+                    std::vector<std::pair<int,int>> oneSided;      // side index -> line index
+                    for (size_t li = 0; li < map.lines.size(); ++li)
+                        if (map.lines[li].sidenum[1] < 0 && map.lines[li].sidenum[0] >= 0 &&
+                            map.lines[li].sidenum[0] < static_cast<int>(map.sides.size()))
+                            oneSided.push_back({map.lines[li].sidenum[0], static_cast<int>(li)});
+                    std::vector<char> isOneSided(map.sides.size(), 0);
+                    for (auto& pr : oneSided) isOneSided[pr.first] = 1;
+                    for (size_t sdi = 0; sdi < map.sides.size(); ++sdi) {
+                        const side_t& sd = map.sides[sdi];
+                        ++nSide;
+                        for (const char* tx : {sd.toptexture, sd.midtexture, sd.bottomtexture}) {
+                            const std::string t = tx;
+                            if (t.empty() || t == "-") continue;
+                            const Texture* w = tex.wall(t);
+                            // A name that resolves to an empty composite is just as fatal as
+                            // an unknown one: drawCol bails before painting, so the column is
+                            // left unpainted.
+                            const bool critical = isOneSided[sdi] && tx == sd.midtexture;
+                            if (!w) badWalls.insert(std::string("MISSING ") + (critical?"+":"-") +
+                                                    t + " (" + name + ")");
+                            else if (w->width <= 0 || w->height <= 0 || w->rgba.empty())
+                                badWalls.insert(std::string("EMPTY ") + (critical?"+":"-") +
+                                                t + " (" + name + ")");
+                        }
+                    }
+                    for (const thing_t& th : map.things) {
+                        ++nThing;
+                        // Things that are placement markers, not objects: player starts
+                        // 1-4, deathmatch start 11, teleport destination 14 (read straight
+                        // from THINGS by the teleport code), boss target 87, and Freedoom's
+                        // 32000. They must never spawn, so they are not resolution failures.
+                        static const int kMarkers[] = {1, 2, 3, 4, 11, 14, 87, 32000};
+                        bool marker = false;
+                        for (int mk : kMarkers) marker = marker || th.type == mk;
+                        if (marker) { ++markerThings; continue; }
+                        const int mt = mobjtypeForDoomednum(th.type);
+                        if (mt < 0) { badThings.insert(std::to_string(th.type) + " (" + name + ")");
+                                      continue; }
+                        const state_t& st = states[mobjinfo[mt].spawnstate];
+                        // A thing with no spawn sprite is a deliberate invisible marker
+                        // (teleport destination / boss target), not a missing sprite.
+                        if (st.sprite == SPR_NONE) continue;
+                        const char frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
+                        if (!sprites.resolve(sprnames[st.sprite], frame, 0).patch)
+                            badSprites.insert(std::to_string(th.type) + " " +
+                                              sprnames[st.sprite] + frame + " (" + name + ")");
+                    }
+                }
+                std::cout << "assetaudit: sectors=" << nSec << " sides=" << nSide
+                          << " things=" << nThing << "\n";
+                std::cout << "  unresolved flats=" << badFlats.size()
+                          << " walls=" << badWalls.size()
+                          << " thingtypes=" << badThings.size()
+                          << " sprites=" << badSprites.size() << "\n";
+                for (const auto& s : badFlats)   std::cout << "   FLAT   " << s << "\n";
+                for (const auto& s : badWalls)   std::cout << "   WALL   " << s << "\n";
+                for (const auto& s : badThings)  std::cout << "   THING  " << s << "\n";
+                for (const auto& s : badSprites) std::cout << "   SPRITE " << s << "\n";
+                // Only one-sided critical failures gate; the rest is reported for triage.
+                int criticalWalls = 0;
+                for (const auto& w : badWalls) if (w.size() > 5 && w[5] == '+') ++criticalWalls;
+                const bool pass = badFlats.empty() && criticalWalls == 0 &&
+                                  badThings.empty() && badSprites.empty();
+                std::cout << "  critical (one-sided) wall failures=" << criticalWalls << "\n";
+                std::cout << "ASSETAUDIT " << (pass ? "PASSED" : "FAILED") << "\n";
+                return pass ? 0 : 1;
+            }
+            if (std::string(argv[i]) == "--renderaudit" && i + 1 < argc) {
+                // P8a all-map render coverage audit. --gapscan proves ONE pose of ONE map;
+                // this walks every map of the IWAD, picks interior camera poses and counts
+                // pixels that no wall and no visplane covered (magenta sentinel, rendered
+                // force-opaque so masked/transparent texels do not count). A non-zero count
+                // is a real coverage hole: a black seam / HOM the player would see.
+                //
+                // Poses come from the map's THINGS (plus the player start): a mapper places
+                // every thing inside real map space, so those are guaranteed-interior camera
+                // spots. Sector centroids can fall outside a concave sector and arbitrary
+                // points land in the void beyond the map, where an empty frame is not a bug.
+                // Usage: --renderaudit <wad> [map ...] [--poses N] [--angles N] [--tolerance N]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                int maxPoses = 12, nAngles = 8, tolerance = 0;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--poses" && k + 1 < argc)      maxPoses = std::atoi(argv[++k]);
+                    else if (a == "--angles" && k + 1 < argc) nAngles = std::atoi(argv[++k]);
+                    else if (a == "--tolerance" && k + 1 < argc) tolerance = std::atoi(argv[++k]);
+                    else if (a.size() == 4 && a[0] == 'E')   wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                TextureLookup tex(wad);
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;   // magenta
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int failingPoses = 0, failingMaps = 0, poseTotal = 0, worstOverall = 0;
+                int suspectTotal = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    // Camera poses: the real player start plus interior sector centroids.
+                    // A centroid of a concave sector can fall outside it, which would render
+                    // the void outside the map (a whole-screen false positive), so every
+                    // candidate is verified: the sector under it must be the one it came from,
+                    // and it must be tall enough to stand in.
+                    struct Pose { int x, y, sec; };
+                    std::vector<Pose> poses;
+                    fixed_t sx, sy; angle_t sang;
+                    if (playerStart(map, sx, sy, sang)) {
+                        int sec = sectorOf(map, R_PointInSubsector(map, sx, sy));
+                        if (sec >= 0) poses.push_back({sx >> FRACBITS, sy >> FRACBITS, sec});
+                    }
+                    // Pose source: the map's THINGS. A mapper places every thing inside real
+                    // map space, so a thing position is a guaranteed-interior camera spot —
+                    // unlike a sector centroid, which can fall outside a concave sector, or an
+                    // arbitrary point, which the BSP resolves to an unbounded leaf in the void
+                    // (there an empty frame is not a bug). Things are spread by grid bucket so
+                    // the sample covers the whole map instead of clustering in one room.
+                    std::map<long long, int> best;          // grid cell -> thing index
+                    for (size_t t = 0; t < map.things.size(); ++t) {
+                        // thing_t stores raw map units (p_setup parses int16 without <<FRACBITS)
+                        const long long gx = map.things[t].x / 512;
+                        const long long gy = map.things[t].y / 512;
+                        best[gx * 1000000LL + gy] = static_cast<int>(t);
+                    }
+                    std::vector<int> pickOrder;
+                    for (auto& kv : best) pickOrder.push_back(kv.second);
+                    const size_t stride = std::max<size_t>(1, pickOrder.size() /
+                                                            static_cast<size_t>(std::max(1, maxPoses)));
+                    for (size_t k = 0; k < pickOrder.size(); k += stride) {
+                        const thing_t& th = map.things[pickOrder[k]];
+                        const fixed_t px = static_cast<fixed_t>(th.x) << FRACBITS;
+                        const fixed_t py = static_cast<fixed_t>(th.y) << FRACBITS;
+                        const int sec = sectorOf(map, R_PointInSubsector(map, px, py));
+                        if (sec < 0) continue;
+                        if (map.sectors[sec].ceilingheight - map.sectors[sec].floorheight < 56)
+                            continue;                       // no headroom: not a player pose
+                        if (!insideSector(map, sec, th.x, th.y))
+                            continue;                       // BSP leaf not inside its own sector
+                        poses.push_back({th.x, th.y, sec});
+                    }
+                    int worst = 0, worstPose = -1, worstAng = 0, suspect = 0;
+                    std::vector<std::tuple<int, int, int, int>> hits;   // gaps, x, y, angle
+                    for (size_t p = 0; p < poses.size(); ++p) {
+                        const Pose& po = poses[p];
+                        const fixed_t eyeZ = (map.sectors[po.sec].floorheight << FRACBITS) + VIEWHEIGHT;
+                        for (int a = 0; a < nAngles; ++a) {
+                            const angle_t ang = degreesToBam(a * 360 / std::max(1, nAngles));
+                            ++poseTotal;
+                            // Force-opaque AND no seam fill: count only pixels that no wall
+                            // and no visplane covered at all.
+                            R_SetSeamFillForDiagnostics(false);
+                            R_SetForceOpaqueForDiagnostics(true);
+                            R_RenderView(fb.data(), FW, FH, map, tex,
+                                         static_cast<float>(po.x), static_cast<float>(po.y),
+                                         bamToRendererRad(ang), static_cast<float>(eyeZ >> FRACBITS),
+                                         0, nullptr, nullptr, SENTINEL);
+                            R_SetForceOpaqueForDiagnostics(false);
+                            int gaps = 0;
+                            for (std::uint32_t q : fb) if (q == SENTINEL) ++gaps;
+                            // A pose that leaves more than half the frame unpainted is not a
+                            // seam: it is a pose the renderer cannot see from at all (a thing
+                            // standing in a sealed pocket / on a degenerate spot). Counted and
+                            // listed separately so it can neither hide a real hole nor be
+                            // mistaken for one.
+                            if (gaps > FW * FH / 2) { ++suspect; ++suspectTotal; continue; }
+                            if (gaps > worst) { worst = gaps; worstPose = static_cast<int>(p);
+                                                worstAng = a * 360 / std::max(1, nAngles); }
+                            if (gaps > tolerance) {
+                                ++failingPoses;
+                                hits.emplace_back(gaps, po.x, po.y, a * 360 / std::max(1, nAngles));
+                            }
+                        }
+                    }
+                    // List the worst offenders so they can be replayed with --gapscan-map.
+                    std::sort(hits.begin(), hits.end(),
+                              [](const std::tuple<int,int,int,int>& a,
+                                 const std::tuple<int,int,int,int>& b){
+                                  return std::get<0>(a) > std::get<0>(b); });
+                    for (size_t k = 0; k < std::min<size_t>(5, hits.size()); ++k)
+                        std::cout << "   " << name << " gaps=" << std::get<0>(hits[k])
+                                  << "  --gapscan-map " << argv[i + 1] << " " << name << " "
+                                  << std::get<3>(hits[k]) << " " << std::get<1>(hits[k]) << " "
+                                  << std::get<2>(hits[k]) << "\n";
+                    if (suspect)
+                        std::cout << "   " << name << " suspect poses (unpainted >50%): "
+                                  << suspect << "\n";
+                    worstOverall = std::max(worstOverall, worst);
+                    if (!hits.empty()) ++failingMaps;
+                    std::cout << name << ": poses=" << poses.size() << " frames="
+                              << poses.size() * static_cast<size_t>(nAngles)
+                              << " worst=" << worst
+                              << (worstPose >= 0 && worst > tolerance
+                                      ? " at (" + std::to_string(poses[worstPose].x) + "," +
+                                        std::to_string(poses[worstPose].y) + ") ang=" +
+                                        std::to_string(worstAng)
+                                      : "")
+                              << " holes=" << hits.size() << " suspect=" << suspect << "\n";
+                }
+                std::cout << "RENDERAUDIT " << (failingMaps ? "FAILED" : "PASSED") << " ("
+                          << failingMaps << " maps with coverage holes, " << failingPoses
+                          << " hole frames, " << poseTotal << " frames sampled, tolerance="
+                          << tolerance << ", worst=" << worstOverall << " uncovered px, suspect="
+                          << suspectTotal << ")\n";
+                return failingMaps ? 1 : 0;
             }
             if (std::string(argv[i]) == "--smoketest" && i + 1 < argc) {
                 // Runtime smoke: exercises the REAL init/movement/toss/render path headlessly.
@@ -453,6 +1099,35 @@ int main(int argc, char** argv) {
                     if (mon->health > 0) P_RemoveMobj(w, *mon);   // keep later checks clean
                     w.player.health = 100; mo->health = 100;
                     w.player.dead = false;
+                }
+
+                // P8b: sector light specials must actually move a lightlevel on the real
+                // map, and standing in a hazard flat must hurt through the live think path.
+                {
+                    int litSec = -1;
+                    for (size_t sI = 0; sI < map.sectors.size(); ++sI) {
+                        const int sp = map.sectors[sI].special;
+                        if (sp == 5 || sp == 6 || sp == 7 || sp == 8 || sp == 10 ||
+                            sp == 11 || sp == 12 || sp == 13 || sp == 14 || sp == 17) {
+                            litSec = static_cast<int>(sI); break;
+                        }
+                    }
+                    check(litSec >= 0, "the map has an animated-light sector");
+                    if (litSec >= 0) {
+                        const int before = map.sectors[litSec].lightlevel;
+                        for (int t = 0; t < 120; ++t) P_RunThinkers(w);
+                        check(map.sectors[litSec].lightlevel != before,
+                            "sector light special changes the lightlevel");
+                    }
+                    const int psec = sectorOf(map, w.player.mo->subsector);
+                    if (psec >= 0) {
+                        std::snprintf(map.sectors[psec].floorpic,
+                                      sizeof(map.sectors[psec].floorpic), "%s", "NUKAGE1");
+                        const int hp0 = w.player.health;
+                        for (int t = 0; t < 40; ++t) { P_PlayerThink(w, false, -1); P_RunThinkers(w); }
+                        check(w.player.health < hp0, "standing in toxic goo damages the player");
+                        w.player.health = hp0; w.player.mo->health = hp0;
+                    }
                 }
 
                 // P6a: synthetic door next to the player (room | closed door). Activate it and

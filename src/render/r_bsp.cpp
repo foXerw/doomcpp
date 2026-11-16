@@ -15,6 +15,8 @@
 namespace {
 constexpr uint32_t NF_SUBSECTOR = 0x8000;
 bool g_forceOpaque = false;          // diagnostics only (see R_SetForceOpaqueForDiagnostics)
+int  g_probeCol = -1;                // diagnostics: trace one screen column
+bool g_seamFill = true;              // paint leftover pixels from their neighbour
 
 struct Cam {
     float px, py, sin, cos, eyeZ, focal;
@@ -22,7 +24,8 @@ struct Cam {
     uint32_t* fb;
     std::vector<int> ceilingClip;    // filled-down-from-top row; init -1
     std::vector<int> floorClip;      // filled-up-from-bottom row; init h
-    std::vector<float> wallDepthPx;  // per-pixel nearest opaque-wall depth (w*h, init +inf); sprite occlusion
+    std::vector<float> worldDepthPx; // per-pixel nearest world surface (w*h, init +inf); sprite occlusion
+    std::vector<uint8_t> seeThru;    // per-pixel "a masked texel deliberately left this open"
     const TextureLookup* tex;
     PlaneCtx plane;                  // visplane rendering context
     std::vector<Visplane> vps;       // visplane list for this frame
@@ -65,6 +68,7 @@ void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffse
         uint32_t texel = T.rgba[static_cast<size_t>(vi) * T.width + ui];
         if (!(texel & 0xFFu)) {                                      // transparent (masked) texel
             if (g_forceOpaque) c.fb[static_cast<size_t>(y) * c.w + x] = 0x000000FFu;   // diagnostics
+            else c.seeThru[static_cast<size_t>(y) * c.w + x] = 1;   // a hole by design, not a seam
             continue;
         }
         uint8_t r = static_cast<uint8_t>((texel >> 24 & 0xFF) * shade);
@@ -73,8 +77,8 @@ void drawCol(Cam& c, int x, float scale, const Texture& T, float U, int rowoffse
         c.fb[static_cast<size_t>(y) * c.w + x] =
             (static_cast<uint32_t>(r) << 24) | (static_cast<uint32_t>(g) << 16) |
             (static_cast<uint32_t>(b) << 8) | 0xFFu;
-        if (colDepth < c.wallDepthPx[static_cast<size_t>(y) * c.w + x])
-            c.wallDepthPx[static_cast<size_t>(y) * c.w + x] = colDepth;
+        if (colDepth < c.worldDepthPx[static_cast<size_t>(y) * c.w + x])
+            c.worldDepthPx[static_cast<size_t>(y) * c.w + x] = colDepth;
     }
     if (solid || upper) c.ceilingClip[x] = std::max(c.ceilingClip[x], std::min(static_cast<int>(std::floor(syBot)), c.h - 1));
     if (solid || lower) c.floorClip[x]   = std::min(c.floorClip[x],   std::max(static_cast<int>(std::ceil(syTop)),  0));
@@ -175,12 +179,37 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
     }
 
     for (int x = x0; x <= x1; ++x) {
-        if (c.ceilingClip[x] >= c.floorClip[x] - 1) continue;
+        const bool probe = x == g_probeCol;      // --colprobe: trace one screen column
+        if (probe)
+            std::printf("  seg line=%d side=%d front=%d back=%d x0=%d x1=%d cHf=%d fHf=%d"
+                          " cHb=%d fHb=%d mid='%s' top='%s' bot='%s' markCeil=%d markFloor=%d",
+                          sg.linedef, sg.side, sg.frontsector, sg.backsector, x0, x1,
+                          cH_f, fH_f, cH_b, fH_b, sd.midtexture, sd.toptexture,
+                          sd.bottomtexture, (int)markCeil, (int)markFloor);
+        if (c.ceilingClip[x] >= c.floorClip[x] - 1) {
+            if (probe) std::printf(" -> SKIP column already closed\n");
+            continue;
+        }
         float sx = (x - c.w / 2.0f) / c.focal;
         float denom = (r1o - r0o) - sx * (d1o - d0o);   // ORIGINAL (un-near-clipped) endpoints — load-bearing for perspective-correct U
-        if (std::fabs(denom) < 1e-9f) continue;
+        if (std::fabs(denom) < 1e-9f) {
+            if (probe) std::printf(" -> SKIP parallel ray\n");
+            continue;
+        }
         float t = (sx * d0o - r0o) / denom;
-        if (t < -0.001f || t > 1.001f) continue;
+        // The projected column range [x0,x1] decides whether this seg covers the column, but
+        // the ray/line intersection can land a hair outside [0,1] at exactly those two edge
+        // columns (float rounding between the forward and inverse projection). Dropping them
+        // left a 1px black seam where two walls meet (E2M6 column 289: 105 unpainted pixels),
+        // because the seg's plane marking is skipped along with its wall. Snap the edge columns
+        // to the segment end; still reject anything else that is genuinely outside.
+        if (t < -0.001f || t > 1.001f) {
+            if (x != x0 && x != x1) {
+                if (probe) std::printf(" -> SKIP t=%.4f outside seg\n", t);
+                continue;
+            }
+            t = std::clamp(t, 0.0f, 1.0f);
+        }
         float depth = d0o + t * (d1o - d0o);
         if (depth <= nearZ) continue;
         float scale = 1.0f / depth;
@@ -189,6 +218,22 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
         // Per-column plane bands (read pre-drawCol clips; vanilla visplane formulas).
         float yCeilF  = c.h / 2.0f - c.focal * (cH_f - c.eyeZ) * scale;
         float yFloorF = c.h / 2.0f - c.focal * (fH_f - c.eyeZ) * scale;
+        // The opening is the band a viewer can see THROUGH: its edges are the nearer of the
+        // two ceilings and the farther of the two floors. A step face (upper/lower wall) that
+        // the mapper left untextured has nothing to paint it, so the plane must close over it
+        // — which is why vanilla bounds the bands by the OPENING, not by the front sector's
+        // nominal heights. Without that, an untextured riser or a closed door with no texture
+        // leaves a black band across the view (found by --renderaudit in E2M2/E3M4/E4M1/E3M7).
+        // When the step IS textured the wall paints the band, so the plane must stop at the
+        // nominal edge or it would overdraw the wall texture.
+        const int openTop = twoSided ? std::min(cH_f, cH_b) : cH_f;
+        const int openBot = twoSided ? std::max(fH_f, fH_b) : fH_f;
+        const bool upperPainted = twoSided && topT && cH_b < cH_f;
+        const bool lowerPainted = twoSided && botT && fH_b > fH_f;
+        const float yOpenTop = c.h / 2.0f - c.focal * (openTop - c.eyeZ) * scale;
+        const float yOpenBot = c.h / 2.0f - c.focal * (openBot - c.eyeZ) * scale;
+        const float yCeilEdge  = upperPainted ? yCeilF : yOpenTop;
+        const float yFloorEdge = lowerPainted ? yFloorF : yOpenBot;
         int cc = c.ceilingClip[x], fc = c.floorClip[x];
         if (markCeil && ceilPlane >= 0) {
             int top = cc + 1;
@@ -198,18 +243,23 @@ void renderSeg(Cam& c, const MapData& m, const seg_t& sg) {
             // top of the screen, so using it left a black band between sky and floor. P3d fix.
             // Non-sky: the wall top row is ceil(yCeilF) (drawCol), so the plane band must end at
             // ceil(yCeilF)-1 to stay contiguous (floor() left a 1-px seam when fractional).
-            int bot = skyCeilF ? static_cast<int>(std::floor(yFloorF))
-                               : (static_cast<int>(std::ceil(yCeilF)) - 1);
+            int bot = skyCeilF ? static_cast<int>(std::floor(yFloorEdge))
+                               : (static_cast<int>(std::ceil(yCeilEdge)) - 1);
             if (bot >= fc) bot = fc - 1;
             if (top <= bot) { c.vps[ceilPlane].top[x] = top; c.vps[ceilPlane].bottom[x] = bot; }
         }
         if (markFloor && floorPlane >= 0) {
-            int top = static_cast<int>(std::floor(yFloorF)) + 1;
+            int top = static_cast<int>(std::floor(yFloorEdge)) + 1;
             int bot = fc - 1;
             if (top <= cc) top = cc + 1;
             if (top <= bot) { c.vps[floorPlane].top[x] = top; c.vps[floorPlane].bottom[x] = bot; }
         }
 
+        if (probe)
+            std::printf("     -> depth=%.1f t=%.3f cc=%d fc=%d yCeilEdge=%.1f yFloorEdge=%.1f"
+                        " upperPainted=%d lowerPainted=%d hasMid=%d\n",
+                        depth, t, cc, fc, yCeilEdge, yFloorEdge,
+                        (int)upperPainted, (int)lowerPainted, midT != nullptr);
         if (!twoSided) {
             // vanilla: top of texture at ceiling, unless DONTPEGBOTTOM (bottom at floor).
             if (midT) {
@@ -277,6 +327,8 @@ void renderNode(Cam& c, const MapData& m, uint32_t idx) {
 }  // namespace
 
 void R_SetForceOpaqueForDiagnostics(bool on) { g_forceOpaque = on; }
+void R_SetColumnProbe(int col) { g_probeCol = col; }
+void R_SetSeamFillForDiagnostics(bool on) { g_seamFill = on; }
 
 
 void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
@@ -293,10 +345,15 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     c.tex = &tex; c.tick = animTick;
     c.ceilingClip.assign(w, -1);
     c.floorClip.assign(w, h);
-    c.wallDepthPx.assign(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    c.worldDepthPx.assign(static_cast<size_t>(w) * h, std::numeric_limits<float>::infinity());
+    c.seeThru.assign(static_cast<size_t>(w) * h, 0);
     c.plane.w = w; c.plane.h = h; c.plane.focal = c.focal; c.plane.eyeZ = eyeZ;
     c.plane.px = px; c.plane.py = py; c.plane.sin = c.sin; c.plane.cos = c.cos;
     c.plane.fb = fb;
+    c.plane.depth = &c.worldDepthPx;   // visplanes must occlude sprites too, not only walls
+    c.plane.sky = tex.sky();
+    c.plane.viewAng = ang;
+    c.plane.skyScroll = static_cast<int>(animTick & 0x7fffffff);   // one column per anim tick
     R_SetupPlaneTables(c.plane);
     c.vps.clear();
     c.vissprites.clear();
@@ -304,9 +361,33 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     for (int i = 0; i < w * h; ++i) fb[i] = clearColor;             // opaque black by default
     renderNode(c, map, static_cast<uint32_t>(map.nodes.size() - 1));
     R_DrawPlanes(c.plane, c.vps);
+    // Coverage guarantee: a column can still hold a row that neither a wall nor a plane band
+    // painted, when two adjacent segs at slightly different depths project the same world
+    // height to neighbouring rows (float rounding; --renderaudit found 1px holes like this in
+    // E1M6). Vanilla avoids it by sharing integer ranges between a wall and its planes;
+    // doomcpp computes them per seg, so repair the seam from the pixel above (or below)
+    // instead of showing a black speck. "Unpainted" is unambiguous: every real write sets
+    // alpha 0xFF, and the default clear value has alpha 0.
+    if (g_seamFill) {
+        for (int x = 0; x < w; ++x)
+            for (int y = 0; y < h; ++y) {
+                std::uint32_t& p = fb[static_cast<size_t>(y) * w + x];
+                if ((p & 0xFFu) == 0xFFu) continue;                 // painted
+                // A masked texel (grate, window, fence) leaves the pixel open on purpose so the
+                // geometry behind it shows; when there is none, vanilla shows black there too.
+                // Only a pixel nobody *chose* to paint is a seam worth repairing.
+                if (c.seeThru[static_cast<size_t>(y) * w + x]) continue;
+                if (y > 0 && (fb[static_cast<size_t>(y - 1) * w + x] & 0xFFu) == 0xFFu)
+                    p = fb[static_cast<size_t>(y - 1) * w + x];
+                else if (y + 1 < h && (fb[static_cast<size_t>(y + 1) * w + x] & 0xFFu) == 0xFFu)
+                    p = fb[static_cast<size_t>(y + 1) * w + x];
+                else p = 0x000000FFu;                               // nothing in this column
+            }
+    }
     // P4: painter's algorithm — sort vissprites far->near (depth DESC) and draw after visplanes.
-    // Per-pixel occlusion: wallDepthPx[y*w+x] holds the nearest opaque wall's depth (recorded
-    // inside drawCol's texel loop), so a nearer wall hides only the sprite pixels it covers.
+    // Per-pixel occlusion: worldDepthPx[y*w+x] holds the nearest opaque SURFACE's depth —
+    // walls from drawCol's texel loop and floors/ceilings from R_DrawSpan — so a nearer wall
+    // OR a nearer floor hides only the sprite pixels it covers.
     // This fixes the old per-column array, where a low floor riser at 32 units hid every sprite
     // in the room (the P4 window/riser limitation).
     // ceilingClip/floorClip stay as the wall-renderer left them (no longer passed to sprites).
@@ -314,6 +395,6 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
         std::sort(c.vissprites.begin(), c.vissprites.end(),
                   [](const vissprite_t& a, const vissprite_t& b){ return a.depth > b.depth; });
         for (const vissprite_t& vs : c.vissprites)
-            R_DrawVisSprite(c.fb, c.w, c.h, vs, c.eyeZ, c.focal, c.wallDepthPx);
+            R_DrawVisSprite(c.fb, c.w, c.h, vs, c.eyeZ, c.focal, c.worldDepthPx);
     }
 }

@@ -258,6 +258,7 @@ TEST_CASE("Monsters without MF_DROPOFF refuse to step off a high ledge") {
 }
 
 TEST_CASE("A_BossDeath lowers tag-666 sectors when the last boss dies") {
+    M_ClearRandom();                                 // the death path rolls P_Random
     MapData m = openMap();
     sector_t s2; s2.floorheight = -64; s2.ceilingheight = 128; s2.tag = 666;
     m.sectors.push_back(s2);

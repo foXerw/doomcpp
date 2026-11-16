@@ -1,5 +1,6 @@
 #include "r_plane.h"
-#include "r_data.h"   // Flat
+#include "r_data.h"   // Flat, Patch
+#include <algorithm>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -96,8 +97,27 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
                 float planeheight, int light, bool sky) {
     if (y < 0 || y >= c.h) return;
     if (sky) {
-        for (int x = x1; x <= x2; ++x)
-            if (x >= 0 && x < c.w) c.fb[(size_t)y * c.w + x] = kSkyColor;
+        // Vanilla pans the sky texture horizontally: the column a pixel looks through is
+        // the camera yaw plus the pixel's own off-axis angle, wrapped into the 256-wide
+        // sky, and the row is taken straight from the screen. Without the patch (an IWAD
+        // without SKY1) keep the old flat colour.
+        if (!c.sky || c.sky->width <= 0 || c.sky->rgba.empty()) {
+            for (int x = x1; x <= x2; ++x)
+                if (x >= 0 && x < c.w) c.fb[(size_t)y * c.w + x] = kSkyColor;
+            return;
+        }
+        constexpr float kTwoPi = 6.2831853071795864769f;
+        const int sw = c.sky->width, sh = c.sky->height;
+        for (int x = x1; x <= x2; ++x) {
+            if (x < 0 || x >= c.w) continue;
+            const float sx = (static_cast<float>(x) - c.w / 2.0f) / c.focal;
+            float a = c.viewAng + std::atan(sx);
+            a = std::fmod(a, kTwoPi);
+            if (a < 0.0f) a += kTwoPi;
+            int tx = (static_cast<int>(a / kTwoPi * sw) + c.skyScroll) % sw;
+            const int ty = std::min(std::max(y, 0), sh - 1);
+            c.fb[(size_t)y * c.w + x] = c.sky->rgba[(size_t)ty * sw + tx];
+        }
         return;
     }
     if (!flat || flat->rgba.empty() || flat->width <= 0) return;
@@ -111,8 +131,15 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
     const float stepR = dist / c.focal;
     const float stepX = stepR * c.cos;
     const float stepY = -stepR * c.sin;
+    // Half a map unit of slack: a sprite standing ON this plane has (almost) exactly this
+    // distance at its own foot row, and must not be clipped by the floor beneath it.
+    const float depthVal = dist + 0.5f;
     for (int x = x1; x <= x2; ++x) {
         if (x >= 0 && x < c.w) {
+            if (c.depth) {
+                float& slot = (*c.depth)[static_cast<size_t>(y) * c.w + x];
+                if (depthVal < slot) slot = depthVal;
+            }
             int tx = static_cast<int>(std::floor(wx)) & 63;
             int ty = static_cast<int>(std::floor(wy)) & 63;
             uint32_t t = flat->rgba[(size_t)ty * flat->width + tx];

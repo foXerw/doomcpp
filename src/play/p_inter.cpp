@@ -29,6 +29,9 @@ void P_DamageMobj(World& w, mobj_t& target, mobj_t* source, int damage) {
     if (damage <= 0) return;
 
     const bool isPlayer = (&target == w.player.mo);
+    // P8b: the invulnerability sphere makes the player a non-target — vanilla returns
+    // before any of the armour arithmetic, so damage simply does not apply.
+    if (isPlayer && w.player.powers[pw_invulnerability] > 0) return;
     if (isPlayer) {
         player_t& p = w.player;
         int absorbed = 0;

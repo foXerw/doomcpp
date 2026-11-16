@@ -54,7 +54,18 @@ struct player_t {
     int      killcount = 0, itemcount = 0;
     int      secretsFound = 0;          // P7: counted once per secret sector
     int      keys = 0;                  // bit0 blue, bit1 yellow, bit2 red
+    int      powers[NUMPOWERS] = {};    // P8b: berserk / invuln / invis / suit / map
     bool     dead = false;
+};
+
+// P8b: sector light specials (the glow / flash / strobe families). The sector's authored
+// lightlevel is the bright end of the cycle; `special` picks the pattern.
+struct LightSpecial {
+    int sector = 0;
+    int base = 0;
+    int special = 0;
+    int tics = 0;        // countdown within the current phase
+    int step = 0;        // glow offset, or flash/strobe phase
 };
 
 struct World {
@@ -65,6 +76,7 @@ struct World {
     std::uint32_t               tic = 0;
     bool                        thinkering = false;   // P_RemoveMobj defers unlinking during a pass
     std::vector<Mover>          movers;               // P6a active sector movers
+    std::vector<LightSpecial>   lights;               // P8b sector light specials
     std::vector<std::vector<const mobj_t*>> thingsBySubsec;
 
     // ---- P7 campaign state ----

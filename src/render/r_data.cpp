@@ -230,6 +230,18 @@ TextureLookup::TextureLookup(const WadFile& wad) {
     }
     for (int i = 0; i < static_cast<int>(flats_.size()); ++i)
         flatIndex_[upper(flats_[i].name)] = i;
+
+    // Sky backdrop: vanilla decodes the SKY1 lump as a texture and pans it horizontally.
+    {
+        int lump = const_cast<WadFile&>(wad).checkNumForName("SKY1");
+        if (lump >= 0) {
+            auto raw = const_cast<WadFile&>(wad).readLump(lump);
+            if (!raw.empty()) {
+                Patch p = decodePatch(raw.data(), raw.size(), palette_.data());
+                if (p.width > 0 && p.height > 0) { sky_ = std::move(p); skyLoaded_ = true; }
+            }
+        }
+    }
 }
 
 const Texture* TextureLookup::wall(const std::string& name) const {

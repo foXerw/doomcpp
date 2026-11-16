@@ -51,10 +51,15 @@ public:
     static bool isSky(const std::string& name);
     // Resolve `name` to its animated frame at `tick`, then look up the flat.
     const Flat* flatForFrame(const std::string& name, uint32_t tick) const;
+    // The sky backdrop (the SKY1 patch, 256 wide and wrapped horizontally). nullptr when
+    // the IWAD has none, in which case the renderer falls back to a flat colour.
+    const Patch* sky() const { return skyLoaded_ ? &sky_ : nullptr; }
 private:
     std::array<uint32_t, 256> palette_{};
     std::unordered_map<std::string, int> wallIndex_;
     std::vector<Texture> walls_;
     std::unordered_map<std::string, int> flatIndex_;
     std::vector<Flat> flats_;
+    Patch sky_;
+    bool skyLoaded_ = false;
 };

@@ -3,6 +3,7 @@
 #include "play/p_mobj.h"
 #include "play/info.h"
 #include "play/p_setup.h"
+#include "play/p_spec.h"   // P_InitLights
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -11,7 +12,7 @@
 namespace {
 
 constexpr char MAGIC[4] = { 'D', 'C', 'P', 'S' };
-constexpr std::int32_t VERSION = 2;
+constexpr std::int32_t VERSION = 3;   // v3 adds the power-up timers
 
 template <typename T>
 bool wr(std::ofstream& f, const T& v) {
@@ -124,6 +125,10 @@ bool G_SaveGame(const World& w, const std::string& path) {
             !wr(f, mo->floorz) || !wr(f, mo->ceilingz) || !wr(f, mo->light) ||
             !wr(f, mo->fullbright)) return false;
     }
+    // P8b power-ups are written LAST so an older file simply lacks the tail and still
+    // loads (mid-record fields would misalign every reader that does not know them).
+    for (int i = 0; i < NUMPOWERS; ++i)
+        if (!wr(f, w.player.powers[i])) return false;
     return static_cast<bool>(f);
 }
 
@@ -135,7 +140,8 @@ bool G_LoadGame(World& w, const std::string& path) {
     if (!f || magic[0] != MAGIC[0] || magic[1] != MAGIC[1] ||
         magic[2] != MAGIC[2] || magic[3] != MAGIC[3]) return false;
     std::int32_t version = 0;
-    if (!rd(f, version) || version != VERSION) return false;
+    // v2 (before the power-up timers) still loads: the tail is simply missing.
+    if (!rd(f, version) || (version != VERSION && version != 2)) return false;
     std::string mapName;
     if (!readString(f, mapName)) return false;
     if (!w.map || mapName != w.mapName) return false;   // main must reload the map first
@@ -181,6 +187,7 @@ bool G_LoadGame(World& w, const std::string& path) {
     if (!rd(f, weapons) || !rd(f, p.readyweapon) || !rd(f, p.keys) ||
         !rd(f, p.killcount) || !rd(f, p.itemcount) || !rd(f, p.secretsFound) ||
         !rd(f, p.dead) || !rd(f, p.damagecount) || !rd(f, p.bonuscount)) return false;
+
     p.weapons = weapons;
     std::int32_t psState[2] = {};
     if (!rd(f, psState[0]) || !rd(f, p.psprites[0].tics) ||
@@ -243,6 +250,14 @@ bool G_LoadGame(World& w, const std::string& path) {
         }
     }
     w.player = p;
+    // P8b: the power-up timers live in the tail. A v2 file ends before them; that is not
+    // an error, the player simply starts with no powers.
+    for (int i = 0; i < NUMPOWERS; ++i) {
+        std::int32_t v = 0;
+        if (!rd(f, v)) break;
+        w.player.powers[i] = v;
+    }
+    P_InitLights(w);   // P8b: rebuild the animated-light list from the sector types
     return true;
 }
 
@@ -254,6 +269,6 @@ bool G_SaveGameLevel(const std::string& path, std::string& mapName) {
     if (!f || magic[0] != MAGIC[0] || magic[1] != MAGIC[1] ||
         magic[2] != MAGIC[2] || magic[3] != MAGIC[3]) return false;
     std::int32_t version = 0;
-    if (!rd(f, version) || version != VERSION) return false;
+    if (!rd(f, version) || (version != VERSION && version != 2)) return false;
     return readString(f, mapName);
 }

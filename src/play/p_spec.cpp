@@ -5,6 +5,9 @@
 #include "core/m_tables.h"
 #include "core/i_system.h"
 #include "play/sfx.h"
+#include "p_inter.h"      // P_DamageMobj (telefrag)
+#include "p_map.h"        // VIEWHEIGHT
+#include "p_inter.h"   // P_DamageMobj (crush)
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -79,6 +82,12 @@ void syncSectorThings(World& w, int sec) {
         fixed_t maxz = mo.ceilingz - mo.height;
         if (maxz < mo.floorz) maxz = mo.floorz;
         if (mo.z > maxz) mo.z = maxz;
+        // No room left means the mover is crushing it: vanilla kills what a door/lift/
+        // rising floor closes onto. Without this the player just sits inside the ceiling
+        // with the camera clamped, which reads as the engine losing an argument with
+        // geometry.
+        if ((mo.flags & MF_SHOOTABLE) && s.floorheight + (mo.height >> FRACBITS) > s.ceilingheight)
+            P_DamageMobj(w, mo, nullptr, 10000);
     }
 }
 
@@ -120,6 +129,14 @@ void startPlat(World& w, int sec, int speed, int waitTics) {
 
 void startFloorOrCeiling(World& w, int sec, MoverKind kind, int target, int speed) {
     if (!w.map || sec < 0 || sec >= static_cast<int>(w.map->sectors.size())) return;
+    // A surface can never travel past the opposite one: a "raise floor to the highest
+    // neighbouring floor" line whose neighbour sits above this sector's ceiling would
+    // otherwise drive the floor through it and leave anyone standing there inside the
+    // ceiling (--clipaudit found exactly that in E1M7 and E3M5).
+    if (kind == MoverKind::Floor && target > w.map->sectors[sec].ceilingheight)
+        target = w.map->sectors[sec].ceilingheight;
+    if (kind == MoverKind::Ceiling && target < w.map->sectors[sec].floorheight)
+        target = w.map->sectors[sec].floorheight;
     Mover* mv = findMover(w, sec, kind);
     if (!mv) { w.movers.push_back(Mover{}); mv = &w.movers.back(); }
     mv->kind = kind; mv->sector = sec;
@@ -146,7 +163,9 @@ int keyForSpecial(int special) {
     }
 }
 
-// 1 = use (Space), 2 = walk-over trigger.
+// Bitmask: 1 = usable (Space within reach), 2 = triggered by crossing. A teleport line
+// can be both: in the IWAD some 125/126 lines are buttons set in a wall (the opening is
+// blocked) and some are pads you walk onto.
 int triggerFor(int special) {
     switch (special) {
     case 1: case 26: case 27: case 28: case 31: case 32: case 33: case 34:
@@ -161,6 +180,8 @@ int triggerFor(int special) {
     case 58: case 82: case 88: case 92: case 97:
     case 100: case 119: case 120: case 127: case 130: case 131:
         return 2;
+    case 125: case 126:            // teleport to the other side of this line
+        return 1 | 2;
     default:
         return 0;
     }
@@ -181,6 +202,74 @@ bool swapSwitchTextures(MapData& m, const line_t& L) {
         return true;   // only the first matching side
     }
     return false;
+}
+
+// The sector on the side of the line the mover is NOT in (a door, or a teleport
+// destination, lives there). Falls back to the back sidedef when the mover is null.
+int otherSideOfMover(const MapData& m, const line_t& L, const mobj_t* who) {
+    int front = sideSector(m, L, 0), back = sideSector(m, L, 1);
+    if (front < 0 || back < 0 || !who ||
+        L.v1 < 0 || L.v2 < 0 ||
+        L.v1 >= static_cast<int>(m.vertices.size()) ||
+        L.v2 >= static_cast<int>(m.vertices.size()))
+        return back >= 0 ? back : front;
+    const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;
+    const double ay = static_cast<double>(m.vertices[L.v1].y) / FRACUNIT;
+    const double bx = static_cast<double>(m.vertices[L.v2].x) / FRACUNIT;
+    const double by = static_cast<double>(m.vertices[L.v2].y) / FRACUNIT;
+    const double px = static_cast<double>(who->x) / FRACUNIT;
+    const double py = static_cast<double>(who->y) / FRACUNIT;
+    const bool onFront = ((bx - ax) * (py - ay) - (by - ay) * (px - ax)) < 0;
+    return onFront ? back : front;
+}
+
+// Teleport to the other side of this line: vanilla picks the nearest teleport landing
+// thing inside the sector behind the line (not a tag-matched one -- verified against
+// the IWAD, where every such line has its landing thing behind it and none in a sector
+// carrying its tag). Anything standing on the pad is telefragged.
+bool teleportOtherSide(World& w, const line_t& L, mobj_t& mo) {
+    if (!w.map) return false;
+    // Two authoring shapes exist in the IWAD: a button set in a wall (the landing pad is
+    // the sector on the far side) and a floor pad you walk onto (by the time the crossing
+    // fires, the mover is already standing in the landing sector). Try the far side first,
+    // then the mover's own side.
+    int cand[2] = { otherSideOfMover(*w.map, L, &mo), sideSector(*w.map, L, 0) };
+    const int here = sectorOf(*w.map, R_PointInSubsector(*w.map, mo.x, mo.y));
+    cand[1] = (cand[1] == cand[0]) ? here : cand[1];
+    const thing_t* best = nullptr;
+    int sec = -1;
+    fixed_t bestDist = 0x7fffffff;
+    for (int pass = 0; pass < 2 && !best; ++pass) {
+        const int trySec = cand[pass];
+        if (trySec < 0) continue;
+        for (const thing_t& th : w.map->things) {
+            if (th.type != 14) continue;
+            const fixed_t x = static_cast<fixed_t>(th.x) << FRACBITS;
+            const fixed_t y = static_cast<fixed_t>(th.y) << FRACBITS;
+            if (sectorOf(*w.map, R_PointInSubsector(*w.map, x, y)) != trySec) continue;
+            const fixed_t dd = std::abs(x - mo.x) + std::abs(y - mo.y);
+            if (dd < bestDist) { bestDist = dd; best = &th; sec = trySec; }
+        }
+    }
+    if (!best || sec < 0) return false;
+    const fixed_t dx = static_cast<fixed_t>(best->x) << FRACBITS;
+    const fixed_t dy = static_cast<fixed_t>(best->y) << FRACBITS;
+    // Telefrag: whatever occupies the landing spot dies (vanilla P_TeleportMove).
+    for (mobj_t& th : w.mobjs) {
+        if (&th == &mo || th.removePending || !(th.flags & MF_SHOOTABLE)) continue;
+        if (std::abs(th.x - dx) > (16 << FRACBITS) || std::abs(th.y - dy) > (16 << FRACBITS)) continue;
+        P_DamageMobj(w, th, nullptr, 10000);
+    }
+    mo.x = dx; mo.y = dy;
+    mo.momx = mo.momy = mo.momz = 0;
+    mo.angle = degreesToBam(best->angleDeg);
+    mo.subsector = R_PointInSubsector(*w.map, dx, dy);
+    mo.floorz   = static_cast<fixed_t>(w.map->sectors[sec].floorheight)   << FRACBITS;
+    mo.ceilingz = static_cast<fixed_t>(w.map->sectors[sec].ceilingheight) << FRACBITS;
+    mo.z = mo.floorz;
+    if (w.player.mo == &mo) w.player.viewz = mo.floorz + VIEWHEIGHT;
+    I_StartSound(SFX_TELEPT);
+    return true;
 }
 
 bool teleportPlayer(World& w, mobj_t& mo, int tag) {
@@ -221,6 +310,65 @@ void P_LowerFloorByTag(World& w, int tag) {
     forTaggedSectors(*w.map, tag, [&](int s) {
         startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorDown(*w.map, s), 4);
     });
+}
+
+// ---- P8b sector light specials ----
+//
+// Vanilla drives these from three thinker shapes (glow / flash / strobe). The sector's
+// authored lightlevel is the bright end; the dark end is the same distance below it that
+// vanilla's tables use (84 units), clamped so a dark sector never goes black. Doomcpp's
+// own periods, chosen to read as "breathing", "flashing" and "strobing" at 35 tics/s.
+namespace {
+bool isGlow(int sp)    { return sp == 13 || sp == 14; }
+bool isFlash(int sp)   { return sp == 5 || sp == 6 || sp == 7 || sp == 8; }
+bool isStrobe(int sp)  { return sp == 10 || sp == 11 || sp == 12 || sp == 17; }
+int  darkEnd(int base) { return base > 116 ? base - 84 : 32; }
+}  // namespace
+
+void P_InitLights(World& w) {
+    w.lights.clear();
+    if (!w.map) return;
+    for (int i = 0; i < static_cast<int>(w.map->sectors.size()); ++i) {
+        const sector_t& s = w.map->sectors[i];
+        if (!isGlow(s.special) && !isFlash(s.special) && !isStrobe(s.special)) continue;
+        LightSpecial ls;
+        ls.sector = i; ls.base = s.lightlevel; ls.special = s.special;
+        ls.tics = isGlow(s.special) ? 8 : (isFlash(s.special) ? (s.special <= 6 ? 12 : 8) : 8);
+        ls.step = 0;
+        w.lights.push_back(ls);
+    }
+}
+
+void P_RunLights(World& w) {
+    if (!w.map) return;
+    for (LightSpecial& ls : w.lights) {
+        if (ls.sector < 0 || ls.sector >= static_cast<int>(w.map->sectors.size())) continue;
+        sector_t& s = w.map->sectors[ls.sector];
+        const int dark = darkEnd(ls.base);
+        if (isGlow(ls.special)) {
+            // ease between the bright and dark end, 3 units per period
+            if (--ls.tics <= 0) {
+                ls.tics = 8;
+                ls.step += (ls.step >= 0 && s.lightlevel >= ls.base) ? -1 : 1;
+                int next = s.lightlevel + 3 * ls.step;
+                if (next >= ls.base) { next = ls.base; ls.step = -1; }
+                if (next <= dark)    { next = dark;  ls.step = 1; }
+                s.lightlevel = next;
+            }
+        } else if (isFlash(ls.special)) {
+            if (--ls.tics <= 0) {
+                ls.tics = (ls.special <= 6) ? 12 : 8;
+                s.lightlevel = (s.lightlevel >= ls.base) ? dark : ls.base;
+            }
+        } else {   // strobe: two bright flashes with long dark holds
+            if (--ls.tics <= 0) {
+                const bool bright = (ls.step % 2) == 0;
+                ls.tics = bright ? 8 : 100;
+                ls.step++;
+                s.lightlevel = bright ? ls.base : dark;
+            }
+        }
+    }
 }
 
 void P_RunMovers(World& w) {
@@ -275,7 +423,7 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
         return;   // locked
     }
 
-    if (triggerFor(L.special) == 1 && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
+    if ((triggerFor(L.special) & 1) && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
         I_StartSound(SFX_SWTCHN);
 
     const int front = sideSector(*w.map, L, 0);
@@ -393,6 +541,9 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     case 39: case 97:
         if (who) teleportPlayer(w, *who, L.tag);
         break;
+    case 125: case 126:
+        if (who) teleportOtherSide(w, L, *who);
+        break;
     // ---- level exits (P7 campaign flow) ----
     case 11: case 52:
         w.levelExitRequested = true;
@@ -426,7 +577,7 @@ void P_UseLines(World& w, mobj_t& mo) {
     const MapData& m = *w.map;
     for (int i = 0; i < static_cast<int>(m.lines.size()); ++i) {
         const line_t& L = m.lines[i];
-        if (triggerFor(L.special) != 1) continue;
+        if (!(triggerFor(L.special) & 1)) continue;
         if (L.v1 < 0 || L.v2 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
             L.v2 >= static_cast<int>(m.vertices.size())) continue;
         const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;
@@ -455,7 +606,7 @@ void P_CrossSpecialLines(World& w, mobj_t& mo, fixed_t oldx, fixed_t oldy) {
     const MapData& m = *w.map;
     for (int i = 0; i < static_cast<int>(m.lines.size()); ++i) {
         const line_t& L = m.lines[i];
-        if (triggerFor(L.special) != 2) continue;
+        if (!(triggerFor(L.special) & 2)) continue;
         if (L.v1 < 0 || L.v2 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
             L.v2 >= static_cast<int>(m.vertices.size())) continue;
         const double ax = static_cast<double>(m.vertices[L.v1].x) / FRACUNIT;

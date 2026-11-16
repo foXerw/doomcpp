@@ -84,4 +84,24 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
              COMMAND $<TARGET_FILE:doomcpp> --campaigntest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
     add_test(NAME sound_smoke
              COMMAND $<TARGET_FILE:doomcpp> --soundtest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    # P8a render coverage: every map, camera poses taken from the map's own things,
+    # counting pixels no wall and no visplane covered. --poses 40 --angles 6 samples
+    # ~9.6k frames in a few seconds. Tolerance 2 px/frame: two adjacent segs at slightly
+    # different depths can project a shared world height to neighbouring rows and leave a
+    # 1px seam (the shipped renderer seam-fills it, so the player never sees it); anything
+    # larger is a real coverage hole — the ones this caught were 105..23400 px.
+    add_test(NAME render_audit
+             COMMAND $<TARGET_FILE:doomcpp> --renderaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
+                     --poses 40 --angles 6 --tolerance 2)
+    # P8a clipping audit: seed a short deterministic walk from mapper-placed spots in every
+    # map and re-test the positions the movement code produced (inside a blocking line? does
+    # the player still fit? are the feet on the support?). Gate settings are the fast ones;
+    # a deep run is `--clipaudit <wad>` with no caps (~2 min, ~3x the sector coverage).
+    add_test(NAME clip_audit
+             COMMAND $<TARGET_FILE:doomcpp> --clipaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
+                     --seeds 25 --steps 150 --every 4)
+    # P8 asset resolution: every flat, wall texture, thing type and sprite frame the 36
+    # campaign maps reference must resolve, or the renderer silently draws nothing there.
+    add_test(NAME asset_audit
+             COMMAND $<TARGET_FILE:doomcpp> --assetaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
 endif()
