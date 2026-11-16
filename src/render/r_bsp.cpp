@@ -351,6 +351,9 @@ void R_RenderView(uint32_t* fb, int w, int h, const MapData& map,
     c.plane.px = px; c.plane.py = py; c.plane.sin = c.sin; c.plane.cos = c.cos;
     c.plane.fb = fb;
     c.plane.depth = &c.worldDepthPx;   // visplanes must occlude sprites too, not only walls
+    c.plane.sky = tex.sky();
+    c.plane.viewAng = ang;
+    c.plane.skyScroll = static_cast<int>(animTick & 0x7fffffff);   // one column per anim tick
     R_SetupPlaneTables(c.plane);
     c.vps.clear();
     c.vissprites.clear();
