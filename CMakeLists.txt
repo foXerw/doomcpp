@@ -93,4 +93,11 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
     add_test(NAME render_audit
              COMMAND $<TARGET_FILE:doomcpp> --renderaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
                      --poses 40 --angles 6 --tolerance 2)
+    # P8a clipping audit: seed a short deterministic walk from mapper-placed spots in every
+    # map and re-test the positions the movement code produced (inside a blocking line? does
+    # the player still fit? are the feet on the support?). Gate settings are the fast ones;
+    # a deep run is `--clipaudit <wad>` with no caps (~2 min, ~3x the sector coverage).
+    add_test(NAME clip_audit
+             COMMAND $<TARGET_FILE:doomcpp> --clipaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
+                     --seeds 25 --steps 150 --every 4)
 endif()

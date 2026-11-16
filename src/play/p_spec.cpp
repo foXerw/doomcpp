@@ -5,6 +5,7 @@
 #include "core/m_tables.h"
 #include "core/i_system.h"
 #include "play/sfx.h"
+#include "p_inter.h"   // P_DamageMobj (crush)
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -79,6 +80,12 @@ void syncSectorThings(World& w, int sec) {
         fixed_t maxz = mo.ceilingz - mo.height;
         if (maxz < mo.floorz) maxz = mo.floorz;
         if (mo.z > maxz) mo.z = maxz;
+        // No room left means the mover is crushing it: vanilla kills what a door/lift/
+        // rising floor closes onto. Without this the player just sits inside the ceiling
+        // with the camera clamped, which reads as the engine losing an argument with
+        // geometry.
+        if ((mo.flags & MF_SHOOTABLE) && s.floorheight + (mo.height >> FRACBITS) > s.ceilingheight)
+            P_DamageMobj(w, mo, nullptr, 10000);
     }
 }
 
@@ -120,6 +127,14 @@ void startPlat(World& w, int sec, int speed, int waitTics) {
 
 void startFloorOrCeiling(World& w, int sec, MoverKind kind, int target, int speed) {
     if (!w.map || sec < 0 || sec >= static_cast<int>(w.map->sectors.size())) return;
+    // A surface can never travel past the opposite one: a "raise floor to the highest
+    // neighbouring floor" line whose neighbour sits above this sector's ceiling would
+    // otherwise drive the floor through it and leave anyone standing there inside the
+    // ceiling (--clipaudit found exactly that in E1M7 and E3M5).
+    if (kind == MoverKind::Floor && target > w.map->sectors[sec].ceilingheight)
+        target = w.map->sectors[sec].ceilingheight;
+    if (kind == MoverKind::Ceiling && target < w.map->sectors[sec].floorheight)
+        target = w.map->sectors[sec].floorheight;
     Mover* mv = findMover(w, sec, kind);
     if (!mv) { w.movers.push_back(Mover{}); mv = &w.movers.back(); }
     mv->kind = kind; mv->sector = sec;

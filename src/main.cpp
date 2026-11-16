@@ -482,6 +482,202 @@ int main(int argc, char** argv) {
                                       : (std::to_string(first) + ".." + std::to_string(last)).c_str());
                 return 0;
             }
+            if (std::string(argv[i]) == "--clipaudit" && i + 1 < argc) {
+                // P8a clipping audit: walk the REAL player around every map with a
+                // deterministic input soak and re-test the position the movement code ended
+                // up at. A position that the collision check itself would refuse means the
+                // player got somewhere it should not be — i.e. tunnelling through a wall,
+                // standing inside a solid thing, or being crushed into a floor.
+                // Usage: --clipaudit <wad> [map ...] [--steps N] [--every N] [--seeds N] [--seed S]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                int steps = 4000, every = 8, maxSeeds = 0;
+                uint32_t seed = 0x1234567u;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--steps" && k + 1 < argc)       steps = std::atoi(argv[++k]);
+                    else if (a == "--every" && k + 1 < argc)  every = std::atoi(argv[++k]);
+                    else if (a == "--seeds" && k + 1 < argc)  maxSeeds = std::atoi(argv[++k]);
+                    else if (a == "--seed" && k + 1 < argc)   seed = static_cast<uint32_t>(std::strtoul(argv[++k], nullptr, 10));
+                    else if (a.size() == 4 && a[0] == 'E')    wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                int violations = 0, violMaps = 0, overlaps = 0, badSeeds = 0, crushes = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    World w; w.map = &map; w.bm = &map.blockmap; w.mapName = name;
+                    P_SetupLevel(w, map);
+                    if (!w.player.mo) { std::cout << name << ": NO PLAYER START\n"; ++violMaps; continue; }
+                    uint32_t rng = seed;
+                    auto next = [&rng]() {                   // xorshift, deterministic per seed
+                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng;
+                    };
+                    const fixed_t walkThrust = 25 * 2048, runThrust = 50 * 2048;
+                    const fixed_t walkSide = 24 * 2048;
+                    const angle_t turnSpeed = degreesToBam(4);
+                    // Seeds: every map thing, spread over a grid so a map with 400 barrels in
+                    // one room does not soak all its budget there, plus the player start.
+                    // A single random walk explores ~2% of a map's sectors (it presses into the
+                    // first corner and stays), which proves too little; starting a short walk
+                    // from each of dozens of mapper-placed spots covers the real floor space.
+                    std::map<std::pair<int,int>, int> byCell;
+                    for (size_t t = 0; t < map.things.size(); ++t)
+                        byCell[{map.things[t].x / 512, map.things[t].y / 512}] = static_cast<int>(t);
+                    std::vector<std::pair<int,int>> seeds;
+                    fixed_t sx0, sy0; angle_t sa0;
+                    if (playerStart(map, sx0, sy0, sa0))
+                        seeds.push_back({sx0 >> FRACBITS, sy0 >> FRACBITS});
+                    for (auto& kv : byCell) {
+                        const thing_t& th = map.things[kv.second];
+                        seeds.push_back({th.x, th.y});
+                    }
+                    // A gate run wants a bounded cost; a deep run leaves maxSeeds at 0.
+                    if (maxSeeds > 0 && static_cast<int>(seeds.size()) > maxSeeds) {
+                        std::vector<std::pair<int,int>> few;
+                        const size_t str = (seeds.size() + maxSeeds - 1) / maxSeeds;
+                        for (size_t k = 0; k < seeds.size(); k += str) few.push_back(seeds[k]);
+                        seeds = few;
+                    }
+                    int thisMapViolations = 0, thisMapOverlaps = 0, checked = 0, walked = 0;
+                    std::set<int> visited;
+                    for (auto sp : seeds) {
+                        mobj_t* mo = w.player.mo;
+                        if (!mo) break;
+                        // Place the player there the way a teleport does: snap to the support,
+                        // kill momentum. A seed the wall collision refuses is not a place the
+                        // player can be (mappers do drop things inside walls), so it is
+                        // counted and skipped rather than reported as clipping.
+                        mo->x = static_cast<fixed_t>(sp.first) << FRACBITS;
+                        mo->y = static_cast<fixed_t>(sp.second) << FRACBITS;
+                        mo->momx = mo->momy = mo->momz = 0;
+                        mo->subsector = R_PointInSubsector(map, mo->x, mo->y);
+                        PosCheck at = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
+                        const int sec0 = sectorOf(map, mo->subsector);
+                        if (!at.ok || sec0 < 0 ||
+                            map.sectors[sec0].floorheight + (mo->height >> FRACBITS) >
+                            map.sectors[sec0].ceilingheight + 1) { ++badSeeds; continue; }
+                        mo->floorz = at.floorz; mo->ceilingz = at.ceilingz; mo->z = at.floorz;
+                        w.player.viewz = mo->z + VIEWHEIGHT;
+                        w.player.dead = false;
+                        w.player.health = 100000; mo->health = 100000;   // monsters, not crushes
+                        fixed_t lastx = mo->x, lasty = mo->y;
+                        int stuck = 0, leg = 0, turnFor = 0, turnDir = 1;
+                        for (int t = 0; t < steps; ++t) {
+                            // Keep the soak alive: monsters and crushing floors would
+                            // otherwise end the walk after a few hundred tics.
+                            // A crush death is the mover doing the right thing; stop here
+                            // rather than continuing to probe a corpse.
+                            if (w.player.dead) { ++crushes; break; }
+                            int fwd = 1, str = 0, trn = 0;
+                            if (stuck > 3) {
+                                turnFor = 14; turnDir = (stuck % 8 < 4) ? 1 : -1;  // sweep out
+                                if (stuck % 7 == 0) P_UseLines(w, w.player);       // doors/switches
+                                if (stuck % 11 == 0) str = (stuck % 22 == 0) ? 1 : -1;
+                                if (stuck > 40) fwd = -1;                          // back off
+                                if (stuck > 70) stuck = 0;                         // retry
+                            } else if (leg > 150 || next() % 97 == 0) {
+                                turnFor = 10 + static_cast<int>(next() % 30);       // new heading
+                                turnDir = (next() % 2) ? 1 : -1;
+                                leg = 0;
+                            }
+                            if (turnFor > 0) { trn = turnDir; --turnFor; }
+                            ++leg; ++walked;
+                            P_MovePlayerWorld(w, w.player,
+                                              fwd * ((next() % 4) ? walkThrust : runThrust),
+                                              str * walkSide, trn * turnSpeed);
+                            // Feet on the support, checked before the movers run: a mover
+                            // that moves the floor afterwards legitimately leaves z one step
+                            // out of date until the next P_CalcHeight.
+                            if (t % every == 0 && w.player.mo &&
+                                w.player.mo->z != w.player.mo->floorz) {
+                                std::cout << "  VIOLATION " << name << " at ("
+                                          << (w.player.mo->x >> FRACBITS) << ","
+                                          << (w.player.mo->y >> FRACBITS) << ") z="
+                                          << (w.player.mo->z >> FRACBITS) << " floorz="
+                                          << (w.player.mo->floorz >> FRACBITS)
+                                          << " sec=" << sectorOf(map, w.player.mo->subsector)
+                                          << " secFloor="
+                                          << (sectorOf(map, w.player.mo->subsector) >= 0
+                                                  ? map.sectors[sectorOf(map, w.player.mo->subsector)]
+                                                        .floorheight : -9999)
+                                          << " viewz=" << (w.player.viewz >> FRACBITS)
+                                          << " movers=" << w.movers.size()
+                                          << " (off the support)\n";
+                                ++violations; ++thisMapViolations;
+                            }
+                            P_RunThinkers(w);
+                            mo = w.player.mo;
+                            if (!mo) break;
+                            if (std::abs(mo->x - lastx) < (2 << FRACBITS) &&
+                                std::abs(mo->y - lasty) < (2 << FRACBITS)) ++stuck;
+                            else stuck = 0;
+                            lastx = mo->x; lasty = mo->y;
+                            if (t % every) continue;
+                            ++checked;
+                            const int sec = sectorOf(map, mo->subsector);
+                            if (sec >= 0) visited.insert(sec);
+                            // 1. the position must not be one the WALL collision forbids:
+                            // straddling a one-sided line, an ML_BLOCKING line, or an opening
+                            // the player does not fit through means the walk got somewhere the
+                            // geometry says it cannot be.
+                            PosCheck walls = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
+                            if (!walls.ok) {
+                                std::cout << "  VIOLATION " << name << " at ("
+                                          << (mo->x >> FRACBITS) << "," << (mo->y >> FRACBITS)
+                                          << ") inside blocking line " << walls.blockedLine
+                                          << " (seed " << sp.first << "," << sp.second
+                                          << " tic " << t << ")\n";
+                                ++violations; ++thisMapViolations;
+                            }
+                            // 2. overlapping a solid thing is reported but not a failure:
+                            // vanilla uses the same vertical-clearance test, so walking off a
+                            // ledge onto a monster that was standing under you legitimately
+                            // overlaps it.
+                            PosCheck all = P_CheckPosition(w, *mo, mo->x, mo->y);
+                            if (walls.ok && !all.ok) { ++overlaps; ++thisMapOverlaps; }
+                            // 3. no room means a mover closed onto the player. Vanilla
+                            // crushes it (P_RunMovers -> P_DamageMobj), so the position is
+                            // only acceptable once that damage has actually been applied —
+                            // otherwise the engine left the player standing inside geometry.
+                            if (sec >= 0 &&
+                                map.sectors[sec].floorheight + (mo->height >> FRACBITS) >
+                                map.sectors[sec].ceilingheight + 1) {
+                                const bool crushed = w.player.dead || mo->health <= 95000;
+                                std::cout << (crushed ? "  crush " : "  VIOLATION ") << name
+                                          << " at (" << (mo->x >> FRACBITS) << ","
+                                          << (mo->y >> FRACBITS) << ") "
+                                          << (crushed ? "crushed by a mover" : "no room, nothing applied")
+                                          << ": sector " << sec
+                                          << " floor=" << map.sectors[sec].floorheight
+                                          << " ceil=" << map.sectors[sec].ceilingheight << "\n";
+                                if (crushed) ++crushes;
+                                else { ++violations; ++thisMapViolations; }
+                                break;                     // this seed is finished either way
+                            }
+                            // (Support height is checked right after the move, above: a mover
+                            // that runs afterwards legitimately leaves floorz one step ahead
+                            // of the feet until the next P_CalcHeight.)
+                        }
+                    }
+                    if (thisMapViolations) ++violMaps;
+                    std::cout << name << ": seeds=" << seeds.size() << " tics=" << walked
+                              << " checked=" << checked
+                              << " sectorsVisited=" << visited.size() << "/" << map.sectors.size()
+                              << " violations=" << thisMapViolations << "\n";
+                }
+                std::cout << "CLIPAUDIT " << (violations ? "FAILED" : "PASSED") << " ("
+                          << violations << " violations in " << violMaps << " maps, "
+                          << overlaps << " benign thing overlaps, " << badSeeds
+                          << " seeds inside geometry)\n";
+                return violations ? 1 : 0;
+            }
             if (std::string(argv[i]) == "--assetaudit" && i + 1 < argc) {
                 // P8a asset resolution audit. A name that does not resolve is not a missing
                 // detail — the renderer silently draws NOTHING for it, which reads to the
@@ -646,7 +842,8 @@ int main(int argc, char** argv) {
                     }
                     std::vector<int> pickOrder;
                     for (auto& kv : best) pickOrder.push_back(kv.second);
-                    const int stride = std::max<size_t>(1, pickOrder.size() / std::max(1, maxPoses));
+                    const size_t stride = std::max<size_t>(1, pickOrder.size() /
+                                                            static_cast<size_t>(std::max(1, maxPoses)));
                     for (size_t k = 0; k < pickOrder.size(); k += stride) {
                         const thing_t& th = map.things[pickOrder[k]];
                         const fixed_t px = static_cast<fixed_t>(th.x) << FRACBITS;
