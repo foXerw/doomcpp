@@ -76,7 +76,7 @@ code; a documented permanent deviation — collision/play code is 16.16 fixed-po
 | 1–8 | Select weapon (fist … BFG) |
 | G | Toss a barrel (debug/physics fun) |
 | F5 / F9 | Quick save / quick load |
-| Enter | Continue (intermission / death / victory) |
+| Enter | Start from the title screen; continue past intermission / death / victory |
 | ESC | Quit |
 
 `--warp E#M#` starts on any level; `--nosound` disables audio.
@@ -142,7 +142,10 @@ ctest --test-dir build --build-config Release --output-on-failure
 # Decode every DS lump, parse every MIDI track, render music synth RMS, play sounds
 ./build/Release/doomcpp.exe --soundtest assets/freedoom1.wad
 
-# Render one frame to BMP (convert BMP→PNG with System.Drawing to view)
+# Title screen (exits non-zero when the frame is mostly black)
+./build/Release/doomcpp.exe --dumptitle assets/freedoom1.wad out.bmp
+
+# Render one frame to BMP (dbg/bmp2png.py converts BMP to PNG, stdlib only)
 ./build/Release/doomcpp.exe --dumpframe-map assets/freedoom1.wad E1M2 out.bmp [angle] [x y]
 ./build/Release/doomcpp.exe --dumpmobs assets/freedoom1.wad prefix_ 150   # one frame per monster
 ./build/Release/doomcpp.exe --dumpintermission assets/freedoom1.wad out.bmp
@@ -172,8 +175,8 @@ The engine reads standard WAD files. For development/testing use
 
 - Music is played by a small built-in synth from Freedoom's MIDI lumps, not an
   OPL/DMX-faithful synthesizer. Melodies and timing are faithful; timbre is not.
-- No menus/title screens; the game starts directly on E1M1 (or `--warp`), and
-  death/intermission continue with Enter.
+- Title screen exists (TITLEPIC plus a blinking prompt), but there are no menus: no
+  episode or skill choice, no options, no load-game menu. `--warp` skips the title.
 - Status-bar face expressions are static (no pain/grin tiers).
 - Intermission uses the status font on a black screen rather than the WI* graphics.
 - Monster pathing is a simplified direct chase with ±45°/±90° detours (no full
