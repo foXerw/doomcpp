@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -54,6 +56,34 @@ static void drawPlayerSprites(const World& w, const SpriteCache& sprites,
         char frame = static_cast<char>('A' + (ps.state->frame & FF_FRAMEMASK));
         R_DrawPSprite(fb, fw, fh, sprnames[ps.state->sprite], frame, ps.sx, ps.sy, sprites);
     }
+}
+
+// P8a diagnostics: is (x,y) really inside sector `sec`? Cast a +X ray and count the
+// sector's boundary edges (lines with the sector on exactly one side); odd = inside.
+// The BSP alone cannot answer this: a point in the void, or a thing standing inside a
+// wall, still resolves to some subsector and therefore to some sector, and rendering
+// from such a spot legitimately paints nothing. Without this filter the render audit
+// would report bogus poses as coverage holes.
+static bool insideSector(const MapData& m, int sec, int x, int y) {
+    int crossings = 0;
+    for (const line_t& L : m.lines) {
+        int a = -1, b = -1;
+        if (L.sidenum[0] >= 0 && L.sidenum[0] < static_cast<int>(m.sides.size()))
+            a = m.sides[L.sidenum[0]].sector;
+        if (L.sidenum[1] >= 0 && L.sidenum[1] < static_cast<int>(m.sides.size()))
+            b = m.sides[L.sidenum[1]].sector;
+        if ((a == sec) == (b == sec)) continue;             // not a boundary of this sector
+        if (L.v1 < 0 || L.v1 >= static_cast<int>(m.vertices.size()) ||
+            L.v2 < 0 || L.v2 >= static_cast<int>(m.vertices.size())) continue;
+        const double ax = m.vertices[L.v1].x / double(FRACUNIT);
+        const double ay = m.vertices[L.v1].y / double(FRACUNIT);
+        const double bx = m.vertices[L.v2].x / double(FRACUNIT);
+        const double by = m.vertices[L.v2].y / double(FRACUNIT);
+        if ((ay > y) == (by > y)) continue;
+        const double xi = ax + (y - ay) * (bx - ax) / (by - ay);
+        if (x < xi) ++crossings;
+    }
+    return (crossings & 1) != 0;
 }
 
 int main(int argc, char** argv) {
@@ -288,6 +318,67 @@ int main(int argc, char** argv) {
                           << t->width << "x" << t->height << ")\n";
                 return 0;
             }
+            if (std::string(argv[i]) == "--gapscan-map" && i + 3 < argc) {
+                // Like --gapscan but for an arbitrary map: <wad> <map> [angleDeg] [x y] [out.bmp]
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, argv[i + 2]);
+                TextureLookup tex(wad);
+                fixed_t px, py; angle_t ang;
+                if (!playerStart(map, px, py, ang)) { I_Printf("no player start"); return 1; }
+                if (i + 3 < argc) ang = degreesToBam(std::atoi(argv[i + 3]));
+                if (i + 5 < argc) {
+                    px = static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS));
+                    py = static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS));
+                }
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int ss0 = R_PointInSubsector(map, px, py);
+                int sec0 = sectorOf(map, ss0);
+                fixed_t eyeZ0 = (sec0 >= 0 ? (static_cast<fixed_t>(map.sectors[sec0].floorheight) << FRACBITS)
+                                           : 0) + VIEWHEIGHT;
+                std::printf("  camera sector %d floor=%d ceil=%d light=%d floorpic='%s' ceilpic='%s'\n",
+                            sec0, sec0 >= 0 ? map.sectors[sec0].floorheight : 0,
+                            sec0 >= 0 ? map.sectors[sec0].ceilingheight : 0,
+                            sec0 >= 0 ? map.sectors[sec0].lightlevel : 0,
+                            sec0 >= 0 ? map.sectors[sec0].floorpic : "?",
+                            sec0 >= 0 ? map.sectors[sec0].ceilingpic : "?");
+                auto renderGap = [&](bool forceOpaque) {
+                    R_SetForceOpaqueForDiagnostics(forceOpaque);
+                    R_SetSeamFillForDiagnostics(false);   // count real holes, not repaired seams
+                    R_RenderView(fb.data(), FW, FH, map, tex,
+                                 static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                                 bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
+                                 nullptr, nullptr, SENTINEL);
+                    R_SetForceOpaqueForDiagnostics(false);
+                    int total = 0, minCol = FW, maxCol = -1, minRow = FH, maxRow = -1;
+                    std::vector<int> rowGaps(FH, 0);
+                    for (int y = 0; y < FH; ++y)
+                        for (int x = 0; x < FW; ++x)
+                            if (fb[static_cast<size_t>(y) * FW + x] == SENTINEL) {
+                                ++total; ++rowGaps[y];
+                                minCol = std::min(minCol, x); maxCol = std::max(maxCol, x);
+                                minRow = std::min(minRow, y); maxRow = std::max(maxRow, y);
+                            }
+                    return std::make_tuple(total, rowGaps, minCol, maxCol, minRow, maxRow);
+                };
+                auto [total, rowGaps, minCol, maxCol, minRow, maxRow] = renderGap(false);
+                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                R_SetSeamFillForDiagnostics(true);
+                std::cout << "gapscan(" << argv[i + 2] << "): raw=" << total << " geometry=" << geom;
+                if (geom) std::cout << " geombbox=x[" << gMinCol << "," << gMaxCol
+                                    << "] y[" << gMinRow << "," << gMaxRow << "]";
+                std::cout << "\n";
+                if (total) std::cout << "  bbox=x[" << minCol << "," << maxCol << "] y[" << minRow
+                                    << "," << maxRow << "]\n";
+                std::vector<int> rows(FH);
+                for (int y = 0; y < FH; ++y) rows[y] = y;
+                std::sort(rows.begin(), rows.end(), [&](int a, int b){ return rowGaps[a] > rowGaps[b]; });
+                for (int k = 0; k < 10 && rowGaps[rows[k]] > 0; ++k)
+                    std::cout << "  row " << rows[k] << ": " << rowGaps[rows[k]] << "\n";
+                if (i + 6 < argc) writeBMP(argv[i + 6], fb.data(), FW, FH);
+                return geom ? 1 : 0;
+            }
             if (std::string(argv[i]) == "--gapscan" && i + 1 < argc) {
                 // Debug diagnostic: render one world-only frame (no sprites) over a
                 // magenta sentinel and count pixels no wall/plane covered. A non-zero
@@ -313,6 +404,7 @@ int main(int argc, char** argv) {
                                            : 0) + VIEWHEIGHT;
                 auto renderGap = [&](bool forceOpaque) {
                     R_SetForceOpaqueForDiagnostics(forceOpaque);
+                    R_SetSeamFillForDiagnostics(false);   // count real holes, not repaired seams
                     R_RenderView(fb.data(), FW, FH, map, tex,
                                  static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
                                  bamToRendererRad(ang), static_cast<float>(eyeZ0 >> FRACBITS), 0,
@@ -331,8 +423,12 @@ int main(int argc, char** argv) {
                 };
                 // Pass 1: raw sentinel count (geometry holes + transparent/masked-texel holes).
                 // Pass 2: transparent texels painted opaque -> counts only TRUE geometry holes.
-                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                // The force-opaque pass runs last so the optional BMP shows the geometry frame,
+                // which is what hole triage needs (the masked pass paints texel holes magenta
+                // and would be mistaken for missing geometry).
                 auto [total, rowGaps, minCol, maxCol, minRow, maxRow] = renderGap(false);
+                auto [geom, geomRows, gMinCol, gMaxCol, gMinRow, gMaxRow] = renderGap(true);
+                R_SetSeamFillForDiagnostics(true);
                 std::cout << "gapscan: raw=" << total << " geometry=" << geom;
                 if (geom) std::cout << " geombbox=x[" << gMinCol << "," << gMaxCol
                                     << "] y[" << gMinRow << "," << gMaxRow << "]";
@@ -345,6 +441,288 @@ int main(int argc, char** argv) {
                     std::cout << "  row " << rows[k] << ": " << rowGaps[rows[k]] << "\n";
                 if (i + 5 < argc) writeBMP(argv[i + 5], fb.data(), FW, FH);   // force-opaque frame
                 return 0;
+            }
+            if (std::string(argv[i]) == "--colprobe" && i + 6 < argc) {
+                // Diagnostics: trace which segs reach one screen column. Usage:
+                //   --colprobe <wad> <map> <angleDeg> <x> <y> <col>
+                WadFile wad(argv[i + 1]);
+                MapData map = loadMap(wad, argv[i + 2]);
+                TextureLookup tex(wad);
+                const angle_t ang = degreesToBam(std::atoi(argv[i + 3]));
+                const fixed_t px = static_cast<fixed_t>(std::atof(argv[i + 4]) * (1 << FRACBITS));
+                const fixed_t py = static_cast<fixed_t>(std::atof(argv[i + 5]) * (1 << FRACBITS));
+                const int col = std::atoi(argv[i + 6]);
+                const int sec = sectorOf(map, R_PointInSubsector(map, px, py));
+                const fixed_t eyeZ = (sec >= 0
+                    ? static_cast<fixed_t>(map.sectors[sec].floorheight) << FRACBITS : 0) + VIEWHEIGHT;
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                std::printf("camera sec=%d floor=%d ceil=%d eye=%d col=%d\n", sec,
+                            sec >= 0 ? map.sectors[sec].floorheight : 0,
+                            sec >= 0 ? map.sectors[sec].ceilingheight : 0,
+                            eyeZ >> FRACBITS, col);
+                R_SetColumnProbe(col);
+                R_SetSeamFillForDiagnostics(false);
+                R_SetForceOpaqueForDiagnostics(true);
+                R_RenderView(fb.data(), FW, FH, map, tex,
+                             static_cast<float>(px >> FRACBITS), static_cast<float>(py >> FRACBITS),
+                             bamToRendererRad(ang), static_cast<float>(eyeZ >> FRACBITS), 0,
+                             nullptr, nullptr, SENTINEL);
+                R_SetForceOpaqueForDiagnostics(false);
+                R_SetColumnProbe(-1);
+                int first = -1, last = -1;
+                for (int y = 0; y < FH; ++y)
+                    if (fb[static_cast<size_t>(y) * FW + col] == SENTINEL) {
+                        if (first < 0) first = y;
+                        last = y;
+                    }
+                std::printf("unpainted rows in col %d: %s\n", col,
+                            first < 0 ? "none"
+                                      : (std::to_string(first) + ".." + std::to_string(last)).c_str());
+                return 0;
+            }
+            if (std::string(argv[i]) == "--assetaudit" && i + 1 < argc) {
+                // P8a asset resolution audit. A name that does not resolve is not a missing
+                // detail — the renderer silently draws NOTHING for it, which reads to the
+                // player as a black hole or a see-through wall. So every flat and wall
+                // texture the maps reference must resolve, and every thing that spawns must
+                // have a mobj type whose sprite frames exist in the IWAD.
+                // Usage: --assetaudit <wad> [map ...]
+                WadFile wad(argv[i + 1]);
+                TextureLookup tex(wad);
+                SpriteCache sprites(wad);
+                std::vector<std::string> wanted;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a.size() == 4 && a[0] == 'E') wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                std::set<std::string> badFlats, badWalls, badThings, badSprites;
+                int nSec = 0, nSide = 0, nThing = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    for (const sector_t& s : map.sectors) {
+                        ++nSec;
+                        for (const char* pic : {s.floorpic, s.ceilingpic}) {
+                            const std::string p = pic;
+                            if (TextureLookup::isSky(p)) continue;
+                            const Flat* fl = tex.flat(p);
+                            if (!fl) badFlats.insert("MISSING " + p + " (" + name + ")");
+                            else if (fl->rgba.empty()) badFlats.insert("EMPTY " + p + " (" + name + ")");
+                        }
+                    }
+                    // One-sided lines are the critical case: an empty texture there leaves a
+                    // see-through hole in the map shell, whereas an empty two-sided middle is
+                    // only a fence/grate that never got built.
+                    std::vector<std::pair<int,int>> oneSided;      // side index -> line index
+                    for (size_t li = 0; li < map.lines.size(); ++li)
+                        if (map.lines[li].sidenum[1] < 0 && map.lines[li].sidenum[0] >= 0 &&
+                            map.lines[li].sidenum[0] < static_cast<int>(map.sides.size()))
+                            oneSided.push_back({map.lines[li].sidenum[0], static_cast<int>(li)});
+                    std::vector<char> isOneSided(map.sides.size(), 0);
+                    for (auto& pr : oneSided) isOneSided[pr.first] = 1;
+                    for (size_t sdi = 0; sdi < map.sides.size(); ++sdi) {
+                        const side_t& sd = map.sides[sdi];
+                        ++nSide;
+                        for (const char* tx : {sd.toptexture, sd.midtexture, sd.bottomtexture}) {
+                            const std::string t = tx;
+                            if (t.empty() || t == "-") continue;
+                            const Texture* w = tex.wall(t);
+                            // A name that resolves to an empty composite is just as fatal as
+                            // an unknown one: drawCol bails before painting, so the column is
+                            // left unpainted.
+                            const bool critical = isOneSided[sdi] && tx == sd.midtexture;
+                            if (!w) badWalls.insert(std::string("MISSING ") + (critical?"+":"-") +
+                                                    t + " (" + name + ")");
+                            else if (w->width <= 0 || w->height <= 0 || w->rgba.empty())
+                                badWalls.insert(std::string("EMPTY ") + (critical?"+":"-") +
+                                                t + " (" + name + ")");
+                        }
+                    }
+                    for (const thing_t& th : map.things) {
+                        ++nThing;
+                        const int mt = mobjtypeForDoomednum(th.type);
+                        if (mt < 0) { badThings.insert(std::to_string(th.type) + " (" + name + ")");
+                                      continue; }
+                        const state_t& st = states[mobjinfo[mt].spawnstate];
+                        // A thing with no spawn sprite is a deliberate invisible marker
+                        // (teleport destination / boss target), not a missing sprite.
+                        if (st.sprite == SPR_NONE) continue;
+                        const char frame = static_cast<char>('A' + (st.frame & FF_FRAMEMASK));
+                        if (!sprites.resolve(sprnames[st.sprite], frame, 0).patch)
+                            badSprites.insert(std::to_string(th.type) + " " +
+                                              sprnames[st.sprite] + frame + " (" + name + ")");
+                    }
+                }
+                std::cout << "assetaudit: sectors=" << nSec << " sides=" << nSide
+                          << " things=" << nThing << "\n";
+                std::cout << "  unresolved flats=" << badFlats.size()
+                          << " walls=" << badWalls.size()
+                          << " thingtypes=" << badThings.size()
+                          << " sprites=" << badSprites.size() << "\n";
+                for (const auto& s : badFlats)   std::cout << "   FLAT   " << s << "\n";
+                for (const auto& s : badWalls)   std::cout << "   WALL   " << s << "\n";
+                for (const auto& s : badThings)  std::cout << "   THING  " << s << "\n";
+                for (const auto& s : badSprites) std::cout << "   SPRITE " << s << "\n";
+                // Only one-sided critical failures gate; the rest is reported for triage.
+                int criticalWalls = 0;
+                for (const auto& w : badWalls) if (w.size() > 5 && w[5] == '+') ++criticalWalls;
+                const bool pass = badFlats.empty() && criticalWalls == 0 &&
+                                  badThings.empty() && badSprites.empty();
+                std::cout << "  critical (one-sided) wall failures=" << criticalWalls << "\n";
+                std::cout << "ASSETAUDIT " << (pass ? "PASSED" : "FAILED") << "\n";
+                return pass ? 0 : 1;
+            }
+            if (std::string(argv[i]) == "--renderaudit" && i + 1 < argc) {
+                // P8a all-map render coverage audit. --gapscan proves ONE pose of ONE map;
+                // this walks every map of the IWAD, picks interior camera poses and counts
+                // pixels that no wall and no visplane covered (magenta sentinel, rendered
+                // force-opaque so masked/transparent texels do not count). A non-zero count
+                // is a real coverage hole: a black seam / HOM the player would see.
+                //
+                // Poses come from the map's THINGS (plus the player start): a mapper places
+                // every thing inside real map space, so those are guaranteed-interior camera
+                // spots. Sector centroids can fall outside a concave sector and arbitrary
+                // points land in the void beyond the map, where an empty frame is not a bug.
+                // Usage: --renderaudit <wad> [map ...] [--poses N] [--angles N] [--tolerance N]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                int maxPoses = 12, nAngles = 8, tolerance = 0;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--poses" && k + 1 < argc)      maxPoses = std::atoi(argv[++k]);
+                    else if (a == "--angles" && k + 1 < argc) nAngles = std::atoi(argv[++k]);
+                    else if (a == "--tolerance" && k + 1 < argc) tolerance = std::atoi(argv[++k]);
+                    else if (a.size() == 4 && a[0] == 'E')   wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                TextureLookup tex(wad);
+                constexpr int FW = 320, FH = 200;
+                constexpr uint32_t SENTINEL = 0xFF00FFFFu;   // magenta
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                int failingPoses = 0, failingMaps = 0, poseTotal = 0, worstOverall = 0;
+                int suspectTotal = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    // Camera poses: the real player start plus interior sector centroids.
+                    // A centroid of a concave sector can fall outside it, which would render
+                    // the void outside the map (a whole-screen false positive), so every
+                    // candidate is verified: the sector under it must be the one it came from,
+                    // and it must be tall enough to stand in.
+                    struct Pose { int x, y, sec; };
+                    std::vector<Pose> poses;
+                    fixed_t sx, sy; angle_t sang;
+                    if (playerStart(map, sx, sy, sang)) {
+                        int sec = sectorOf(map, R_PointInSubsector(map, sx, sy));
+                        if (sec >= 0) poses.push_back({sx >> FRACBITS, sy >> FRACBITS, sec});
+                    }
+                    // Pose source: the map's THINGS. A mapper places every thing inside real
+                    // map space, so a thing position is a guaranteed-interior camera spot —
+                    // unlike a sector centroid, which can fall outside a concave sector, or an
+                    // arbitrary point, which the BSP resolves to an unbounded leaf in the void
+                    // (there an empty frame is not a bug). Things are spread by grid bucket so
+                    // the sample covers the whole map instead of clustering in one room.
+                    std::map<long long, int> best;          // grid cell -> thing index
+                    for (size_t t = 0; t < map.things.size(); ++t) {
+                        // thing_t stores raw map units (p_setup parses int16 without <<FRACBITS)
+                        const long long gx = map.things[t].x / 512;
+                        const long long gy = map.things[t].y / 512;
+                        best[gx * 1000000LL + gy] = static_cast<int>(t);
+                    }
+                    std::vector<int> pickOrder;
+                    for (auto& kv : best) pickOrder.push_back(kv.second);
+                    const int stride = std::max<size_t>(1, pickOrder.size() / std::max(1, maxPoses));
+                    for (size_t k = 0; k < pickOrder.size(); k += stride) {
+                        const thing_t& th = map.things[pickOrder[k]];
+                        const fixed_t px = static_cast<fixed_t>(th.x) << FRACBITS;
+                        const fixed_t py = static_cast<fixed_t>(th.y) << FRACBITS;
+                        const int sec = sectorOf(map, R_PointInSubsector(map, px, py));
+                        if (sec < 0) continue;
+                        if (map.sectors[sec].ceilingheight - map.sectors[sec].floorheight < 56)
+                            continue;                       // no headroom: not a player pose
+                        if (!insideSector(map, sec, th.x, th.y))
+                            continue;                       // BSP leaf not inside its own sector
+                        poses.push_back({th.x, th.y, sec});
+                    }
+                    int worst = 0, worstPose = -1, worstAng = 0, suspect = 0;
+                    std::vector<std::tuple<int, int, int, int>> hits;   // gaps, x, y, angle
+                    for (size_t p = 0; p < poses.size(); ++p) {
+                        const Pose& po = poses[p];
+                        const fixed_t eyeZ = (map.sectors[po.sec].floorheight << FRACBITS) + VIEWHEIGHT;
+                        for (int a = 0; a < nAngles; ++a) {
+                            const angle_t ang = degreesToBam(a * 360 / std::max(1, nAngles));
+                            ++poseTotal;
+                            // Force-opaque AND no seam fill: count only pixels that no wall
+                            // and no visplane covered at all.
+                            R_SetSeamFillForDiagnostics(false);
+                            R_SetForceOpaqueForDiagnostics(true);
+                            R_RenderView(fb.data(), FW, FH, map, tex,
+                                         static_cast<float>(po.x), static_cast<float>(po.y),
+                                         bamToRendererRad(ang), static_cast<float>(eyeZ >> FRACBITS),
+                                         0, nullptr, nullptr, SENTINEL);
+                            R_SetForceOpaqueForDiagnostics(false);
+                            int gaps = 0;
+                            for (std::uint32_t q : fb) if (q == SENTINEL) ++gaps;
+                            // A pose that leaves more than half the frame unpainted is not a
+                            // seam: it is a pose the renderer cannot see from at all (a thing
+                            // standing in a sealed pocket / on a degenerate spot). Counted and
+                            // listed separately so it can neither hide a real hole nor be
+                            // mistaken for one.
+                            if (gaps > FW * FH / 2) { ++suspect; ++suspectTotal; continue; }
+                            if (gaps > worst) { worst = gaps; worstPose = static_cast<int>(p);
+                                                worstAng = a * 360 / std::max(1, nAngles); }
+                            if (gaps > tolerance) {
+                                ++failingPoses;
+                                hits.emplace_back(gaps, po.x, po.y, a * 360 / std::max(1, nAngles));
+                            }
+                        }
+                    }
+                    // List the worst offenders so they can be replayed with --gapscan-map.
+                    std::sort(hits.begin(), hits.end(),
+                              [](const std::tuple<int,int,int,int>& a,
+                                 const std::tuple<int,int,int,int>& b){
+                                  return std::get<0>(a) > std::get<0>(b); });
+                    for (size_t k = 0; k < std::min<size_t>(5, hits.size()); ++k)
+                        std::cout << "   " << name << " gaps=" << std::get<0>(hits[k])
+                                  << "  --gapscan-map " << argv[i + 1] << " " << name << " "
+                                  << std::get<3>(hits[k]) << " " << std::get<1>(hits[k]) << " "
+                                  << std::get<2>(hits[k]) << "\n";
+                    if (suspect)
+                        std::cout << "   " << name << " suspect poses (unpainted >50%): "
+                                  << suspect << "\n";
+                    worstOverall = std::max(worstOverall, worst);
+                    if (!hits.empty()) ++failingMaps;
+                    std::cout << name << ": poses=" << poses.size() << " frames="
+                              << poses.size() * static_cast<size_t>(nAngles)
+                              << " worst=" << worst
+                              << (worstPose >= 0 && worst > tolerance
+                                      ? " at (" + std::to_string(poses[worstPose].x) + "," +
+                                        std::to_string(poses[worstPose].y) + ") ang=" +
+                                        std::to_string(worstAng)
+                                      : "")
+                              << " holes=" << hits.size() << " suspect=" << suspect << "\n";
+                }
+                std::cout << "RENDERAUDIT " << (failingMaps ? "FAILED" : "PASSED") << " ("
+                          << failingMaps << " maps with coverage holes, " << failingPoses
+                          << " hole frames, " << poseTotal << " frames sampled, tolerance="
+                          << tolerance << ", worst=" << worstOverall << " uncovered px, suspect="
+                          << suspectTotal << ")\n";
+                return failingMaps ? 1 : 0;
             }
             if (std::string(argv[i]) == "--smoketest" && i + 1 < argc) {
                 // Runtime smoke: exercises the REAL init/movement/toss/render path headlessly.

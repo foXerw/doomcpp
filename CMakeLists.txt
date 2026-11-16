@@ -84,4 +84,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
              COMMAND $<TARGET_FILE:doomcpp> --campaigntest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
     add_test(NAME sound_smoke
              COMMAND $<TARGET_FILE:doomcpp> --soundtest ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
+    # P8a render coverage: every map, camera poses taken from the map's own things,
+    # counting pixels no wall and no visplane covered. --poses 40 --angles 6 samples
+    # ~9.6k frames in a few seconds. Tolerance 2 px/frame: two adjacent segs at slightly
+    # different depths can project a shared world height to neighbouring rows and leave a
+    # 1px seam (the shipped renderer seam-fills it, so the player never sees it); anything
+    # larger is a real coverage hole — the ones this caught were 105..23400 px.
+    add_test(NAME render_audit
+             COMMAND $<TARGET_FILE:doomcpp> --renderaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
+                     --poses 40 --angles 6 --tolerance 2)
 endif()
