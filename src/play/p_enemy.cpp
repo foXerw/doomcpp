@@ -191,6 +191,9 @@ bool P_LookForPlayers(World& w, mobj_t& actor) {
     mobj_t* pl = w.player.mo;
     if (!pl || &actor == pl) return false;
     if (w.player.dead || w.player.health <= 0 || pl->health <= 0) return false;
+    // P8b: the partial-invisibility sphere hides the player from sight-based waking
+    // (monsters can still be alerted by noise or by being damaged).
+    if (w.player.powers[pw_invisibility] > 4 * 32) return false;
     const fixed_t dist = aproxDistance(pl->x - actor.x, pl->y - actor.y);
     if (dist > MAXSIGHT) return false;
     if (!(actor.flags & MF_AMBUSH)) {

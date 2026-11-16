@@ -54,6 +54,7 @@ struct player_t {
     int      killcount = 0, itemcount = 0;
     int      secretsFound = 0;          // P7: counted once per secret sector
     int      keys = 0;                  // bit0 blue, bit1 yellow, bit2 red
+    int      powers[NUMPOWERS] = {};    // P8b: berserk / invuln / invis / suit / map
     bool     dead = false;
 };
 

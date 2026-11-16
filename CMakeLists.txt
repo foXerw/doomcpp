@@ -100,4 +100,8 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
     add_test(NAME clip_audit
              COMMAND $<TARGET_FILE:doomcpp> --clipaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad
                      --seeds 25 --steps 150 --every 4)
+    # P8 asset resolution: every flat, wall texture, thing type and sprite frame the 36
+    # campaign maps reference must resolve, or the renderer silently draws nothing there.
+    add_test(NAME asset_audit
+             COMMAND $<TARGET_FILE:doomcpp> --assetaudit ${CMAKE_CURRENT_SOURCE_DIR}/assets/freedoom1.wad)
 endif()

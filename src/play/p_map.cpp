@@ -1,6 +1,7 @@
 #include "p_map.h"
 #include "p_inter.h"
 #include "p_spec.h"   // P_CrossSpecialLines (walk triggers)
+#include "p_pspr.h"    // P_SetPsprite (berserk forces the fist)
 #include "core/m_fixed.h"
 #include "core/m_tables.h"
 #include "core/i_system.h"
@@ -341,6 +342,57 @@ bool touchSpecialThing(World& w, mobj_t& thing) {
         return got;
     }
     case 2005: return giveWeapon(WP_CHAINSAW);                    // chainsaw
+    case 2006:                                                    // BFG 9000
+        if (giveWeapon(WP_BFG)) { addAmmo(AM_CELL, 40); return true; }
+        break;
+    case 2047: if (addAmmo(AM_CELL, 300)) return true; break;      // cell pack
+    case 2019:                                                     // blue (heavy) armour
+        if (p.armorpoints[1] < 200) { p.armorpoints[1] = 200; p.armortype = 2; return true; }
+        break;
+    case 8: {                                                      // backpack: caps double
+        bool any = false;
+        for (int i = 0; i < NUMAMMO; ++i)
+            if (p.maxammo[i] < 2 * ammoinfo[i].maxammo) {
+                p.ammo[i] += ammoinfo[i].maxammo;                  // carried ammo moves with it
+                p.maxammo[i] = 2 * ammoinfo[i].maxammo;
+                any = true;
+            }
+        return any;
+    }
+    // ---- P8b power-ups: the effect is the timer; see p_pspr/p_inter/p_enemy ----
+    case 2022:                                                     // invulnerability sphere
+        if (p.powers[pw_invulnerability] < 30 * 35) {
+            p.powers[pw_invulnerability] = 30 * 35; return true;
+        }
+        break;
+    case 2024:                                                     // partial invisibility
+        if (p.powers[pw_invisibility] < 60 * 35) {
+            p.powers[pw_invisibility] = 60 * 35; return true;
+        }
+        break;
+    case 2025:                                                     // radiation suit
+        if (p.powers[pw_ironfeet] < 60 * 35) {
+            p.powers[pw_ironfeet] = 60 * 35; return true;
+        }
+        break;
+    case 2026:                                                     // computer area map
+        if (!p.powers[pw_allmap]) { p.powers[pw_allmap] = 1; return true; }
+        break;
+    case 2023: {                                                   // berserk pack
+        p.powers[pw_strength] = 1;                                  // permanent
+        bool healed = p.health < 200;
+        if (healed) { p.health = 200; if (w.player.mo) w.player.mo->health = 200; }
+        p.readyweapon = WP_FIST;                                    // vanilla forces the fist
+        p.pendingweapon = NUMWEAPONS;
+        P_SetPsprite(w, p, 0, weaponinfo[WP_FIST].readystate);
+        return healed || !p.powers[pw_strength];
+    }
+    case 2045: {                                                    // supercharge sphere
+        bool any = false;
+        for (int i = 0; i < NUMAMMO; ++i)
+            if (p.ammo[i] < p.maxammo[i]) { p.ammo[i] = p.maxammo[i]; any = true; }
+        return any;
+    }
     case 5:  if (!(p.keys & KEY_BLUE))   { p.keys |= KEY_BLUE;   return true; } break;
     case 6:  if (!(p.keys & KEY_YELLOW)) { p.keys |= KEY_YELLOW; return true; } break;
     case 13: if (!(p.keys & KEY_RED))    { p.keys |= KEY_RED;    return true; } break;

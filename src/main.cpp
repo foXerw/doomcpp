@@ -702,7 +702,7 @@ int main(int argc, char** argv) {
                             wanted.push_back(n);
                         }
                 std::set<std::string> badFlats, badWalls, badThings, badSprites;
-                int nSec = 0, nSide = 0, nThing = 0;
+                int nSec = 0, nSide = 0, nThing = 0, markerThings = 0;
                 for (const std::string& name : wanted) {
                     MapData map = loadMap(wad, name);
                     for (const sector_t& s : map.sectors) {
@@ -745,6 +745,14 @@ int main(int argc, char** argv) {
                     }
                     for (const thing_t& th : map.things) {
                         ++nThing;
+                        // Things that are placement markers, not objects: player starts
+                        // 1-4, deathmatch start 11, teleport destination 14 (read straight
+                        // from THINGS by the teleport code), boss target 87, and Freedoom's
+                        // 32000. They must never spawn, so they are not resolution failures.
+                        static const int kMarkers[] = {1, 2, 3, 4, 11, 14, 87, 32000};
+                        bool marker = false;
+                        for (int mk : kMarkers) marker = marker || th.type == mk;
+                        if (marker) { ++markerThings; continue; }
                         const int mt = mobjtypeForDoomednum(th.type);
                         if (mt < 0) { badThings.insert(std::to_string(th.type) + " (" + name + ")");
                                       continue; }

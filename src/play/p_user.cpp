@@ -10,6 +10,10 @@ void P_PlayerThink(World& w, bool attack, int weaponSwitch) {
     if (p.damagecount > 0) --p.damagecount;
     if (p.bonuscount  > 0) --p.bonuscount;
 
+    // P8b: timed powers count down; berserk and the area map are permanent flags.
+    for (int i = 0; i < NUMPOWERS; ++i)
+        if (i != pw_strength && i != pw_allmap && p.powers[i] > 0) --p.powers[i];
+
     if (p.dead) return;   // no weapon handling while dead
 
     if (weaponSwitch >= 0 && weaponSwitch < NUMWEAPONS &&

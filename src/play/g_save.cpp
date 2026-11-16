@@ -11,7 +11,7 @@
 namespace {
 
 constexpr char MAGIC[4] = { 'D', 'C', 'P', 'S' };
-constexpr std::int32_t VERSION = 2;
+constexpr std::int32_t VERSION = 3;   // v3 adds the power-up timers
 
 template <typename T>
 bool wr(std::ofstream& f, const T& v) {
@@ -87,6 +87,8 @@ bool G_SaveGame(const World& w, const std::string& path) {
     if (!wr(f, weapons) || !wr(f, p.readyweapon) || !wr(f, p.keys) ||
         !wr(f, p.killcount) || !wr(f, p.itemcount) || !wr(f, p.secretsFound) ||
         !wr(f, p.dead) || !wr(f, p.damagecount) || !wr(f, p.bonuscount)) return false;
+    for (int i = 0; i < NUMPOWERS; ++i)
+        if (!wr(f, p.powers[i])) return false;      // P8b power-ups
     for (int i = 0; i < 2; ++i) {
         const std::int32_t st = p.psprites[i].state ? static_cast<std::int32_t>(p.psprites[i].state - states)
                                                     : -1;
@@ -181,6 +183,8 @@ bool G_LoadGame(World& w, const std::string& path) {
     if (!rd(f, weapons) || !rd(f, p.readyweapon) || !rd(f, p.keys) ||
         !rd(f, p.killcount) || !rd(f, p.itemcount) || !rd(f, p.secretsFound) ||
         !rd(f, p.dead) || !rd(f, p.damagecount) || !rd(f, p.bonuscount)) return false;
+    for (int i = 0; i < NUMPOWERS; ++i)
+        if (!rd(f, p.powers[i])) return false;      // P8b power-ups
     p.weapons = weapons;
     std::int32_t psState[2] = {};
     if (!rd(f, psState[0]) || !rd(f, p.psprites[0].tics) ||

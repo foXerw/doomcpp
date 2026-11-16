@@ -122,11 +122,14 @@ void P_DoWeaponAction(World& w, player_t& p, int index, action_t action) {
             P_SpawnPlayerMissile(w, p, MT_BFG);
         }
         break;
-    case A_Punch:
+    case A_Punch: {
         P_NoiseAlert(w, p.mo);
         I_StartSound(SFX_PUNCH);
-        firePellet(w, p, MELEERANGE, (M_Random() % 10 + 1) << 1);
+        // Vanilla A_Punch: (P_Random()+1)*2, and a berserk punch multiplies that by 10.
+        const int base = (M_Random() % 10 + 1) * 2;
+        firePellet(w, p, MELEERANGE, base * (p.powers[pw_strength] ? 10 : 1));
         break;
+    }
     case A_Saw:
         P_NoiseAlert(w, p.mo);
         I_StartSound(SFX_SAWFUL);
