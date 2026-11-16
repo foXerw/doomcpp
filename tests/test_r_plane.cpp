@@ -2,6 +2,7 @@
 #include "render/r_plane.h"
 #include "render/r_data.h"   // Flat
 #include <cmath>
+#include <limits>
 #include <vector>
 
 TEST_CASE("R_FindPlane merges coplanar, creates distinct") {
@@ -153,4 +154,33 @@ TEST_CASE("R_PlaneSpans: empty plane (minx>maxx) yields nothing") {
     Visplane pl; pl.minx = 5; pl.maxx = -1;
     pl.top.assign(8, kOpenTop); pl.bottom.assign(8, kOpenBot);
     CHECK(R_PlaneSpans(pl).empty());
+}
+
+// ---- P8a: visplanes must also record depth, so sprites behind a floor are hidden ----
+
+TEST_CASE("R_DrawSpan records the plane's forward depth (with a half-unit sprite tolerance)") {
+    PlaneCtx c; c.w = 8; c.h = 8; c.focal = 4.0f; c.eyeZ = 4.0f;
+    c.px = c.py = 0.0f; c.sin = 0.0f; c.cos = 1.0f;
+    std::vector<uint32_t> fb(64, 0u); c.fb = fb.data();
+    std::vector<float> depth(64, std::numeric_limits<float>::infinity());
+    c.depth = &depth;
+    R_SetupPlaneTables(c);
+    Flat f; f.width = f.height = 64; f.rgba.assign(64 * 64, 0x112233FFu);
+    // Row 6 is 2 px under the horizon: dist = planeheight * yslope[6] = 4 * (4/2) = 8.
+    R_DrawSpan(c, 6, 0, 7, &f, 4.0f, 255, false);
+    CHECK(fb[6 * 8 + 3] != 0u);                                  // painted
+    CHECK(depth[6 * 8 + 3] == doctest::Approx(8.5f));            // 8 + the 0.5 tolerance
+    CHECK(std::isinf(depth[0]));                                 // rows it did not paint stay far
+}
+
+TEST_CASE("R_DrawSpan: sky never occludes anything") {
+    PlaneCtx c; c.w = 8; c.h = 8; c.focal = 4.0f; c.eyeZ = 4.0f;
+    c.px = c.py = 0.0f; c.sin = 0.0f; c.cos = 1.0f;
+    std::vector<uint32_t> fb(64, 0u); c.fb = fb.data();
+    std::vector<float> depth(64, std::numeric_limits<float>::infinity());
+    c.depth = &depth;
+    R_SetupPlaneTables(c);
+    R_DrawSpan(c, 6, 0, 7, nullptr, 4.0f, 255, true);            // sky row
+    CHECK(fb[6 * 8 + 3] == kSkyColor);                           // drawn...
+    CHECK(std::isinf(depth[6 * 8 + 3]));                         // ...but infinitely far
 }

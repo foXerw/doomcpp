@@ -111,8 +111,15 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
     const float stepR = dist / c.focal;
     const float stepX = stepR * c.cos;
     const float stepY = -stepR * c.sin;
+    // Half a map unit of slack: a sprite standing ON this plane has (almost) exactly this
+    // distance at its own foot row, and must not be clipped by the floor beneath it.
+    const float depthVal = dist + 0.5f;
     for (int x = x1; x <= x2; ++x) {
         if (x >= 0 && x < c.w) {
+            if (c.depth) {
+                float& slot = (*c.depth)[static_cast<size_t>(y) * c.w + x];
+                if (depthVal < slot) slot = depthVal;
+            }
             int tx = static_cast<int>(std::floor(wx)) & 63;
             int ty = static_cast<int>(std::floor(wy)) & 63;
             uint32_t t = flat->rgba[(size_t)ty * flat->width + tx];

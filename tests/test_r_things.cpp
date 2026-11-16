@@ -242,3 +242,28 @@ TEST_CASE("R_DrawVisSprite fuzz (spectre) blends with the framebuffer") {
     CHECK((px >> 24 & 0xFF) < 160);
     CHECK((px & 0xFFu) == 0xFFu);                        // still opaque
 }
+
+TEST_CASE("a sprite standing on a floor is not clipped by that floor, but is by a nearer one") {
+    int w=8,h=8; float focal=4.0f, eyeZ=4.0f;
+    std::vector<uint32_t> fb(w*h, 0u);
+    Patch p{2,2, 0,2, std::vector<uint32_t>(4, 0u)};
+    uint32_t red = (0xFFu<<24)|0xFFu;
+    for (auto& c : p.rgba) c = red;                       // 2x2 fully opaque
+    vissprite_t vs;
+    vs.depth=8.0f; vs.scale=0.5f; vs.x1=2; vs.x2=5; vs.xTrueLeft=2.0f;
+    vs.gzt=6.0f; vs.patch=&p; vs.flip=false; vs.light=255;
+    // The floor the sprite stands on: its recorded depth is its own distance plus the
+    // half-unit tolerance R_DrawSpan writes, so the sprite's own footprint must survive.
+    std::vector<float> floorDepth(static_cast<size_t>(w)*h, std::numeric_limits<float>::infinity());
+    for (int x = 0; x < w; ++x) floorDepth[3*w+x] = 8.5f;   // row 3 == the sprite's foot row
+    R_DrawVisSprite(fb.data(), w, h, vs, eyeZ, focal, floorDepth);
+    CHECK(fb[2*w+2] != 0u);                                // body drawn
+    CHECK(fb[3*w+2] != 0u);                                // feet NOT clipped by their own floor
+    // A platform nearer than the sprite hides the rows it covers.
+    std::vector<float> plat(static_cast<size_t>(w)*h, std::numeric_limits<float>::infinity());
+    for (int y = 2; y < h; ++y) for (int x = 0; x < w; ++x) plat[y*w+x] = 4.5f;
+    std::vector<uint32_t> fb2(w*h, 0u);
+    R_DrawVisSprite(fb2.data(), w, h, vs, eyeZ, focal, plat);
+    CHECK(fb2[2*w+2] == 0u);                               // hidden behind the platform
+    CHECK(fb2[3*w+2] == 0u);
+}

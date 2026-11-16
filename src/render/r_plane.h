@@ -12,8 +12,12 @@ constexpr uint32_t kSkyColor = (0x40u<<24)|(0x30u<<16)|(0x28u<<8)|0xFFu;  // tun
 struct Visplane { float height=0; const Flat* flat=nullptr; int lightlevel=0; bool sky=false;
                   int minx=0, maxx=-1; std::vector<int> top, bottom; };
 
+// `depth` (optional) is the frame's per-pixel world-depth buffer: R_DrawSpan records the
+// plane's forward distance there so sprites behind a floor/ceiling are hidden by it, not
+// only by walls. Sky is deliberately never recorded (it is infinitely far).
 struct PlaneCtx { int w=0,h=0; float focal=0,eyeZ=0,px=0,py=0,sin=0,cos=0; uint32_t* fb=nullptr;
-                  std::vector<float> yslope, distscale; };
+                  std::vector<float> yslope, distscale;
+                  std::vector<float>* depth = nullptr; };
 
 float R_DistanceShade(float depth);
 int  R_FindPlane(std::vector<Visplane>& vps, float height, const Flat* flat, int light, bool sky, int w);
