@@ -5,7 +5,6 @@
 #include "core/m_tables.h"
 #include "core/i_system.h"
 #include "play/sfx.h"
-#include "p_inter.h"      // P_DamageMobj (telefrag)
 #include "p_map.h"        // VIEWHEIGHT
 #include "p_inter.h"   // P_DamageMobj (crush)
 #include <algorithm>
@@ -322,7 +321,17 @@ namespace {
 bool isGlow(int sp)    { return sp == 13 || sp == 14; }
 bool isFlash(int sp)   { return sp == 5 || sp == 6 || sp == 7 || sp == 8; }
 bool isStrobe(int sp)  { return sp == 10 || sp == 11 || sp == 12 || sp == 17; }
-int  darkEnd(int base) { return base > 116 ? base - 84 : 32; }
+// Vanilla's light tables are absolute, not offsets from the sector's own light: a sector
+// authored at lightlevel 0 with a flash type still flashes bright. doomcpp's own version of
+// that rule -- the bright end is never dimmer than what the map authored, the dark end is
+// 84 below it (or 0), and the two ends must differ or there is nothing to animate.
+void lightEnds(int special, int base, int& bright, int& dark) {
+    const int hi = isStrobe(special) ? 200 : 176;
+    bright = std::max(base, hi);
+    dark   = base > 84 ? base - 84 : 0;
+    if (bright <= dark) bright = dark + 64;       // guarantee a visible swing
+    if (bright > 255) { bright = 255; dark = 191; }
+}
 }  // namespace
 
 void P_InitLights(World& w) {
@@ -333,6 +342,7 @@ void P_InitLights(World& w) {
         if (!isGlow(s.special) && !isFlash(s.special) && !isStrobe(s.special)) continue;
         LightSpecial ls;
         ls.sector = i; ls.base = s.lightlevel; ls.special = s.special;
+        lightEnds(s.special, s.lightlevel, ls.bright, ls.dark);
         ls.tics = isGlow(s.special) ? 8 : (isFlash(s.special) ? (s.special <= 6 ? 12 : 8) : 8);
         ls.step = 0;
         w.lights.push_back(ls);
@@ -344,28 +354,31 @@ void P_RunLights(World& w) {
     for (LightSpecial& ls : w.lights) {
         if (ls.sector < 0 || ls.sector >= static_cast<int>(w.map->sectors.size())) continue;
         sector_t& s = w.map->sectors[ls.sector];
-        const int dark = darkEnd(ls.base);
+        const int dark = ls.dark, bright = ls.bright;
         if (isGlow(ls.special)) {
             // ease between the bright and dark end, 3 units per period
             if (--ls.tics <= 0) {
                 ls.tics = 8;
-                ls.step += (ls.step >= 0 && s.lightlevel >= ls.base) ? -1 : 1;
-                int next = s.lightlevel + 3 * ls.step;
-                if (next >= ls.base) { next = ls.base; ls.step = -1; }
-                if (next <= dark)    { next = dark;  ls.step = 1; }
-                s.lightlevel = next;
+                const int next = s.lightlevel + 3 * (ls.step ? -ls.step : 1);
+                if (next >= bright) { s.lightlevel = bright; ls.step = -1; }
+                else if (next <= dark) { s.lightlevel = dark; ls.step = 1; }
+                else { s.lightlevel = next; ls.step = next > s.lightlevel ? 1 : -1; }
             }
         } else if (isFlash(ls.special)) {
+            // Alternate on a phase, never on the current lightlevel: comparing to `base`
+            // latches a sector whose authored light already equals the dark end (8 sectors
+            // in this IWAD have lightlevel 0 or 32 with a flash type) and it stops flashing.
             if (--ls.tics <= 0) {
                 ls.tics = (ls.special <= 6) ? 12 : 8;
-                s.lightlevel = (s.lightlevel >= ls.base) ? dark : ls.base;
+                ls.step ^= 1;
+                s.lightlevel = ls.step ? dark : bright;
             }
         } else {   // strobe: two bright flashes with long dark holds
             if (--ls.tics <= 0) {
-                const bool bright = (ls.step % 2) == 0;
-                ls.tics = bright ? 8 : 100;
-                ls.step++;
-                s.lightlevel = bright ? ls.base : dark;
+                const bool on = (ls.step & 1) == 0;
+                ls.tics = on ? 8 : 100;
+                ls.step = (ls.step + 1) & 1;
+                s.lightlevel = on ? bright : dark;
             }
         }
     }
@@ -383,7 +396,12 @@ void P_RunMovers(World& w) {
         sector_t& s = w.map->sectors[mv.sector];
         int& h = (mv.kind == MoverKind::Door || mv.kind == MoverKind::Ceiling)
                      ? s.ceilingheight : s.floorheight;
-        const int target = (mv.state == 0) ? mv.top : mv.bottom;
+        // Clamp against the opposite surface every tic, not only when the mover starts:
+        // a switch line can start a floor and a ceiling moving at the same time, and the
+        // start-time clamp alone let the floor walk past a ceiling that was dropping.
+        int target = (mv.state == 0) ? mv.top : mv.bottom;
+        if (mv.kind == MoverKind::Floor && target > s.ceilingheight) target = s.ceilingheight;
+        if (mv.kind == MoverKind::Ceiling && target < s.floorheight) target = s.floorheight;
         int newH = h;
         if (h < target)      newH = std::min(h + mv.speed, target);
         else if (h > target) newH = std::max(h - mv.speed, target);

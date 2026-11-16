@@ -32,6 +32,7 @@
 #include "ui/st_stuff.h"
 #include "ui/f_font.h"
 #include "ui/f_intermission.h"
+#include "ui/f_title.h"
 #include "play/g_game.h"
 #include "play/g_save.h"
 #include "play/midi.h"
@@ -232,6 +233,24 @@ int main(int argc, char** argv) {
                 writeBMP(argv[i + 3], fb.data(), FW, FH);
                 std::cout << "wrote " << argv[i + 3] << " (" << argv[i + 2] << ")\n";
                 return 0;
+            }
+            if (std::string(argv[i]) == "--dumptitle" && i + 2 < argc) {
+                // P8c: render the title screen headlessly (the interactive path is the same
+                // TitleScreen::draw call), so its layout can be checked without a window.
+                WadFile wad(argv[i + 1]);
+                Font font(wad);
+                TitleScreen title(wad);
+                if (!title.valid()) { I_Printf("no TITLEPIC in this WAD"); return 1; }
+                constexpr int FW = 320, FH = 200;
+                std::vector<std::uint32_t> fb(static_cast<size_t>(FW) * FH, 0);
+                title.draw(fb.data(), FW, FH, font, 0);
+                writeBMP(argv[i + 2], fb.data(), FW, FH);
+                int nonblack = 0;
+                for (std::uint32_t p : fb) if (p != 0x000000FFu) ++nonblack;
+                std::cout << "wrote " << argv[i + 2] << " (" << title.width() << "x"
+                          << title.height() << ", " << nonblack * 100 / (FW * FH)
+                          << "% non-black)\n";
+                return nonblack > FW * FH / 2 ? 0 : 1;
             }
             if (std::string(argv[i]) == "--dumpintermission" && i + 2 < argc) {
                 // Render the real STCFN-font intermission screen to a BMP for visual checks.
@@ -798,12 +817,15 @@ int main(int argc, char** argv) {
                             // A name that resolves to an empty composite is just as fatal as
                             // an unknown one: drawCol bails before painting, so the column is
                             // left unpainted.
+                            // Mark the severity in a structured field, not inside the
+                            // string: a gate that greps for a character at a hand-counted
+                            // offset silently reads the wrong byte and passes forever.
                             const bool critical = isOneSided[sdi] && tx == sd.midtexture;
-                            if (!w) badWalls.insert(std::string("MISSING ") + (critical?"+":"-") +
-                                                    t + " (" + name + ")");
+                            if (!w) badWalls.insert(std::string(critical ? "CRIT " : "info ") +
+                                                    "MISSING " + t + " (" + name + ")");
                             else if (w->width <= 0 || w->height <= 0 || w->rgba.empty())
-                                badWalls.insert(std::string("EMPTY ") + (critical?"+":"-") +
-                                                t + " (" + name + ")");
+                                badWalls.insert(std::string(critical ? "CRIT " : "info ") +
+                                                "EMPTY " + t + " (" + name + ")");
                         }
                     }
                     for (const thing_t& th : map.things) {
@@ -841,7 +863,7 @@ int main(int argc, char** argv) {
                 for (const auto& s : badSprites) std::cout << "   SPRITE " << s << "\n";
                 // Only one-sided critical failures gate; the rest is reported for triage.
                 int criticalWalls = 0;
-                for (const auto& w : badWalls) if (w.size() > 5 && w[5] == '+') ++criticalWalls;
+                for (const auto& w : badWalls) if (w.compare(0, 5, "CRIT ") == 0) ++criticalWalls;
                 const bool pass = badFlats.empty() && criticalWalls == 0 &&
                                   badThings.empty() && badSprites.empty();
                 std::cout << "  critical (one-sided) wall failures=" << criticalWalls << "\n";
@@ -1121,11 +1143,17 @@ int main(int argc, char** argv) {
                     }
                     const int psec = sectorOf(map, w.player.mo->subsector);
                     if (psec >= 0) {
+                        const char wasFloorPic[9] = { 0 };
+                        std::memcpy((void*)wasFloorPic, map.sectors[psec].floorpic, 8);
                         std::snprintf(map.sectors[psec].floorpic,
                                       sizeof(map.sectors[psec].floorpic), "%s", "NUKAGE1");
                         const int hp0 = w.player.health;
                         for (int t = 0; t < 40; ++t) { P_PlayerThink(w, false, -1); P_RunThinkers(w); }
                         check(w.player.health < hp0, "standing in toxic goo damages the player");
+                        // Restore the floor: later stages walk the same sector and must not
+                        // keep ticking hazard damage.
+                        std::snprintf(map.sectors[psec].floorpic,
+                                      sizeof(map.sectors[psec].floorpic), "%s", wasFloorPic);
                         w.player.health = hp0; w.player.mo->health = hp0;
                     }
                 }
@@ -1443,10 +1471,15 @@ int main(int argc, char** argv) {
             P_SetupLevel(w, map, carry);
             if (audio) i_sound::playMusic(wad, "D_" + name);
         };
+        TitleScreen title(wad);
         loadLevel(startLevel, nullptr);
+        // No level theme under the title screen.
+        if (audio && title.valid()) i_sound::stopMusic();
 
-        enum class GameState { Playing, Intermission, Dead, Victory };
-        GameState state = GameState::Playing;
+        enum class GameState { Title, Playing, Intermission, Dead, Victory };
+        // Start on the title screen when the IWAD has one; a WAD without TITLEPIC must not
+        // end up on a blank screen, so it goes straight into the level as before.
+        GameState state = title.valid() ? GameState::Title : GameState::Playing;
         std::string nextLevel;
         const std::string SAVE_PATH = "doomcpp-quicksave.dat";
 
@@ -1467,7 +1500,13 @@ int main(int argc, char** argv) {
         while (running) {
             running = i_video::pollEvents(in);
 
-            if (state == GameState::Intermission || state == GameState::Victory) {
+            if (state == GameState::Title) {
+                if (in.enter || in.use) {
+                    in.enter = in.use = false;
+                    state = GameState::Playing;
+                    if (audio) i_sound::playMusic(wad, "D_" + levelName);
+                }
+            } else if (state == GameState::Intermission || state == GameState::Victory) {
                 if (in.enter || in.use) {
                     in.enter = in.use = false;
                     if (state == GameState::Victory) {
@@ -1543,7 +1582,9 @@ int main(int argc, char** argv) {
             in.enter = in.save = in.load = false;
             in.use = false;
 
-            if (state == GameState::Intermission || state == GameState::Victory) {
+            if (state == GameState::Title) {
+                title.draw(fb.data(), FB_W, FB_H, font, w.tic);
+            } else if (state == GameState::Intermission || state == GameState::Victory) {
                 int kills = w.totalKills > 0 ? (w.player.killcount * 100 / w.totalKills) : 0;
                 int items = w.totalItems > 0 ? (w.player.itemcount * 100 / w.totalItems) : 0;
                 int secrets = w.totalSecrets > 0

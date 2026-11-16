@@ -105,3 +105,27 @@ TEST_CASE("P_CheckSecrets counts a secret sector once") {
     P_CheckSecrets(w, mo);                 // second visit must not double-count
     CHECK(w.player.secretsFound == 1);
 }
+
+TEST_CASE("P_SetupLevel carries power-ups and the doubled ammo caps across levels") {
+    MapData m = oneSectorMap();
+    m.things.push_back({256, 256, 90, 1});            // player start: the init block needs one
+    World w; w.map = &m; w.bm = &m.blockmap; w.mapName = "E1M1";
+    P_SetupLevel(w, m);
+    REQUIRE(w.player.mo);
+    w.player.powers[pw_strength] = 1;
+    w.player.powers[pw_invulnerability] = 500;
+    w.player.powers[pw_allmap] = 1;
+    w.player.maxammo[AM_SHELL] = 100;               // backpacked
+    w.player.ammo[AM_SHELL] = 90;
+
+    player_t carry = w.player;
+    MapData m2 = oneSectorMap();
+    m2.things.push_back({256, 256, 90, 1});
+    World w2; w2.map = &m2; w2.bm = &m2.blockmap; w2.mapName = "E1M2";
+    P_SetupLevel(w2, m2, &carry);
+    CHECK(w2.player.powers[pw_strength] == 1);        // permanent powers survive
+    CHECK(w2.player.powers[pw_invulnerability] == 500);
+    CHECK(w2.player.powers[pw_allmap] == 1);
+    CHECK(w2.player.maxammo[AM_SHELL] == 100);        // caps are carried, not reset
+    CHECK(w2.player.ammo[AM_SHELL] == 90);            // ... and ammo is not truncated to base
+}

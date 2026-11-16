@@ -24,6 +24,7 @@ add_executable(doomcpp_tests
     test_r_plane.cpp
     test_r_things.cpp
     test_info.cpp
+    test_f_title.cpp
 )
 target_link_libraries(doomcpp_tests PRIVATE doctest doomcore)
 target_include_directories(doomcpp_tests PRIVATE ${doctest_SOURCE_DIR}/doctest)

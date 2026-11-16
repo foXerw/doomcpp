@@ -379,19 +379,21 @@ bool touchSpecialThing(World& w, mobj_t& thing) {
         if (!p.powers[pw_allmap]) { p.powers[pw_allmap] = 1; return true; }
         break;
     case 2023: {                                                   // berserk pack
+        // Always consumed, even at full health: an item that refuses to be picked up
+        // re-triggers every tic and litters the floor forever.
         p.powers[pw_strength] = 1;                                  // permanent
-        bool healed = p.health < 200;
-        if (healed) { p.health = 200; if (w.player.mo) w.player.mo->health = 200; }
+        if (p.health < 200) { p.health = 200; if (w.player.mo) w.player.mo->health = 200; }
         p.readyweapon = WP_FIST;                                    // vanilla forces the fist
         p.pendingweapon = NUMWEAPONS;
         P_SetPsprite(w, p, 0, weaponinfo[WP_FIST].readystate);
-        return healed || !p.powers[pw_strength];
+        return true;
     }
     case 2045: {                                                    // supercharge sphere
-        bool any = false;
         for (int i = 0; i < NUMAMMO; ++i)
-            if (p.ammo[i] < p.maxammo[i]) { p.ammo[i] = p.maxammo[i]; any = true; }
-        return any;
+            if (p.ammo[i] < p.maxammo[i]) p.ammo[i] = p.maxammo[i];
+        if (p.health < 200) { p.health = std::min(200, p.health + 100);
+                              if (w.player.mo) w.player.mo->health = p.health; }
+        return true;
     }
     case 5:  if (!(p.keys & KEY_BLUE))   { p.keys |= KEY_BLUE;   return true; } break;
     case 6:  if (!(p.keys & KEY_YELLOW)) { p.keys |= KEY_YELLOW; return true; } break;
@@ -555,6 +557,10 @@ void P_CalcHeight(const MapData& m, player_t& p) {
     // height made every height-dependent test read a phantom player: thing blocking skipped
     // (walk straight through barrels/monsters once off the spawn floor), and hitscan/missile
     // vertical tests hit or missed at the wrong height (P8a, found while auditing E1M1 ledges).
+    // Same clamp syncSectorThings applies when a mover does it: the feet are on the
+    // support, and when the ceiling has closed to less than the player's height there is
+    // no legal height left, so the floor wins (the crush damage that goes with it is what
+    // removes the body; an invulnerable player simply squashes visually, as in vanilla).
     p.mo->z = p.mo->floorz;
     // Vanilla view bob: eye rises slightly with horizontal momentum (capped at MAXBOB).
     fixed_t bob = 0;

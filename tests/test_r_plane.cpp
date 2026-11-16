@@ -158,6 +158,35 @@ TEST_CASE("R_PlaneSpans: empty plane (minx>maxx) yields nothing") {
 
 // ---- P8a: visplanes must also record depth, so sprites behind a floor are hidden ----
 
+TEST_CASE("R_DrawSpan maps the sky patch by view angle, not by screen column") {
+    PlaneCtx c; c.w = 8; c.h = 8; c.focal = 4.0f; c.eyeZ = 4.0f;
+    c.px = c.py = 0.0f; c.sin = 0.0f; c.cos = 1.0f;   // viewAng = atan2(sin,cos) = 0
+    std::vector<uint32_t> fb(64, 0u); c.fb = fb.data();
+    R_SetupPlaneTables(c);
+    // A 16-wide sky whose column k is the colour k, so the sampled column is readable.
+    Patch sky; sky.width = 16; sky.height = 4;
+    sky.rgba.assign(16 * 4, 0u);
+    for (int tx = 0; tx < 16; ++tx)
+        for (int ty = 0; ty < 4; ++ty)
+            sky.rgba[ty * 16 + tx] = (static_cast<uint32_t>(tx) << 16) | 0xFFu;
+    c.sky = &sky;
+    c.skyScroll = 0;
+    R_DrawSpan(c, 1, 0, 7, nullptr, 4.0f, 255, true);
+    const int midCol = static_cast<int>((fb[1 * 8 + 4] >> 16) & 0xFF);   // x=4 is left of centre
+    const int right  = static_cast<int>((fb[1 * 8 + 7] >> 16) & 0xFF);
+    CHECK(midCol != right);                       // the panorama varies across the screen
+    CHECK((fb[1 * 8 + 0] & 0xFFu) == 0xFFu);      // sky is opaque, never "unpainted"
+    c.skyScroll = 4;                              // panning shifts the whole backdrop
+    std::fill(fb.begin(), fb.end(), 0u);
+    R_DrawSpan(c, 1, 0, 7, nullptr, 4.0f, 255, true);
+    CHECK(static_cast<int>((fb[1 * 8 + 4] >> 16) & 0xFF) != midCol);
+    // Sky must not occlude sprites: no depth is recorded for it.
+    std::vector<float> depth(64, std::numeric_limits<float>::infinity());
+    c.depth = &depth;
+    R_DrawSpan(c, 1, 0, 7, nullptr, 4.0f, 255, true);
+    CHECK(std::isinf(depth[8]));
+}
+
 TEST_CASE("R_DrawSpan records the plane's forward depth (with a half-unit sprite tolerance)") {
     PlaneCtx c; c.w = 8; c.h = 8; c.focal = 4.0f; c.eyeZ = 4.0f;
     c.px = c.py = 0.0f; c.sin = 0.0f; c.cos = 1.0f;

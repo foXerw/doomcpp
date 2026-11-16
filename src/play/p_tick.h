@@ -62,10 +62,12 @@ struct player_t {
 // lightlevel is the bright end of the cycle; `special` picks the pattern.
 struct LightSpecial {
     int sector = 0;
-    int base = 0;
+    int base = 0;        // the map's authored lightlevel
+    int bright = 0;      // the two absolute ends the pattern alternates between
+    int dark = 0;
     int special = 0;
     int tics = 0;        // countdown within the current phase
-    int step = 0;        // glow offset, or flash/strobe phase
+    int step = 0;        // glow direction, or flash/strobe phase
 };
 
 struct World {

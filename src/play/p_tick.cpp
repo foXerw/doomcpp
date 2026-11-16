@@ -22,6 +22,10 @@ void P_SetupLevel(World& w, const MapData& m, const player_t* carry) {
         saved.weapons = carry->weapons;
         saved.readyweapon = carry->readyweapon;
         saved.keys = carry->keys;
+        // P8c: a level change is not a respawn. Power-ups (berserk permanently, the
+        // timed ones with their remaining tics) and the backpack's raised caps belong to
+        // the player; dropping them un-berserked the player at every exit.
+        for (int i = 0; i < NUMPOWERS; ++i) saved.powers[i] = carry->powers[i];
     }
     w.mobjs.clear();
     w.player.mo = nullptr;
@@ -84,10 +88,14 @@ void P_SetupLevel(World& w, const MapData& m, const player_t* carry) {
             w.player.health = saved.health > 0 ? saved.health : 100;
             for (int i = 0; i < 2; ++i) w.player.armorpoints[i] = saved.armorpoints[i];
             w.player.armortype = saved.armortype;
+            // The caps carry too (a backpack's doubled limits must survive), and ammo is
+            // clamped against them rather than against the freshly reset base caps.
+            for (int i = 0; i < NUMAMMO; ++i) w.player.maxammo[i] = saved.maxammo[i];
             for (int i = 0; i < NUMAMMO; ++i)
                 w.player.ammo[i] = std::min(saved.ammo[i], w.player.maxammo[i]);
             w.player.weapons = saved.weapons | (1u << WP_FIST);
             w.player.keys = saved.keys;
+            for (int i = 0; i < NUMPOWERS; ++i) w.player.powers[i] = saved.powers[i];
             if (saved.readyweapon >= 0 && saved.readyweapon < NUMWEAPONS &&
                 (w.player.weapons & (1u << saved.readyweapon)))
                 w.player.readyweapon = saved.readyweapon;
@@ -135,7 +143,13 @@ void P_RunThinkers(World& w) {
     }
     w.thinkering = false;
     w.mobjs.remove_if([](const mobj_t& m) { return m.removePending; });
+    // Movers can kill (a crushing floor telefrags what it closes onto) and so can the
+    // door/teleport paths they reach; that removal must be deferred exactly as during the
+    // thinker pass, because P_RunMovers iterates w.mobjs while doing it.
+    w.thinkering = true;
     P_RunMovers(w);   // P6a doors/lifts/floors/ceilings
+    w.thinkering = false;
+    w.mobjs.remove_if([](const mobj_t& m) { return m.removePending; });
     P_RunLights(w);   // P8b sector glow / flash / strobe
 }
 

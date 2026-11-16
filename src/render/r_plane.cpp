@@ -1,7 +1,6 @@
 #include "r_plane.h"
 #include "r_data.h"   // Flat, Patch
 #include <algorithm>
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -115,8 +114,13 @@ void R_DrawSpan(PlaneCtx& c, int y, int x1, int x2, const Flat* flat,
             a = std::fmod(a, kTwoPi);
             if (a < 0.0f) a += kTwoPi;
             int tx = (static_cast<int>(a / kTwoPi * sw) + c.skyScroll) % sw;
-            const int ty = std::min(std::max(y, 0), sh - 1);
-            c.fb[(size_t)y * c.w + x] = c.sky->rgba[(size_t)ty * sw + tx];
+            // Rows map to the sky by how far above the horizon they are, so the whole
+            // texture is used instead of repeating its last row down to the floor line.
+            const int above = std::max(c.h / 2 - y, 0);
+            int ty = static_cast<int>(static_cast<float>(above) * sh /
+                                      std::max(c.h / 2, 1));
+            if (ty >= sh) ty = sh - 1;
+            c.fb[(size_t)y * c.w + x] = c.sky->rgba[(size_t)ty * sw + tx] | 0xFFu;
         }
         return;
     }

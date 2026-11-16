@@ -44,6 +44,7 @@ add_library(doomcore STATIC
     src/ui/st_stuff.cpp
     src/ui/f_font.cpp
     src/ui/f_intermission.cpp
+    src/ui/f_title.cpp
 )
 target_include_directories(doomcore PUBLIC src)
 

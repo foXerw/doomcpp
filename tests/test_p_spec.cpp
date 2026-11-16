@@ -325,3 +325,28 @@ TEST_CASE("Crossing a walk-over teleport line triggers it once per crossing") {
     CHECK(mo->x == SF(200));
     CHECK(mo->y == SF(50));
 }
+
+TEST_CASE("A flash sector authored at the dark end still returns to it") {
+    // Regression: the flash pattern used to compare the live lightlevel with the base, so a
+    // sector authored at 0 (eight of them exist in the campaign) latched at the "dark" value
+    // and never flashed again.
+    MapData m;
+    sector_t s; s.floorheight = 0; s.ceilingheight = 128; s.lightlevel = 0; s.special = 8;
+    m.sectors.push_back(s);
+    seg_t g; g.linedef = -1; g.side = 0; g.frontsector = 0; g.backsector = -1; m.segs.push_back(g);
+    subsector_t ss; ss.segcount = 1; ss.firstseg = 0; m.subsectors.push_back(ss);
+    World w; w.map = &m;
+    P_InitLights(w);
+    REQUIRE(w.lights.size() == 1);
+    bool wentBright = false, wentDarkAgain = false;
+    int seen = m.sectors[0].lightlevel;
+    for (int i = 0; i < 400; ++i) {
+        P_RunLights(w);
+        const int now = m.sectors[0].lightlevel;
+        if (now > seen) wentBright = true;
+        if (wentBright && now == 0) wentDarkAgain = true;
+        seen = now;
+    }
+    CHECK(wentBright);
+    CHECK(wentDarkAgain);                            // and came back to the authored 0
+}
