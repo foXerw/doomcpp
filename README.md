@@ -4,7 +4,8 @@ A faithful, from-scratch reimplementation of the classic DOOM (1993) engine in
 modern C++17, using SDL2 for windowing/input/audio and software rendering
 matching the original renderer's algorithms.
 
-**Status:** P8 — the campaign is complete *and audited* (tag `v0.15-p8-integrity`).
+**Status:** P9 — the campaign is complete *and audited*, and the later levels have been
+swept for the defects that make a recreation feel wrong.
 P8 did not add a new milestone; it went looking for the classes of defect that make a
 recreation feel wrong — unpainted pixels, sprites poking through floors, things you walk
 through, items that never spawn, teleporters that do nothing — and closed them with
@@ -58,7 +59,7 @@ Highlights of the campaign phase (P6b/P7):
 - **Player feel**: vanilla-style thrust + friction momentum, wall sliding, view bob,
   Shift to run, knockback.
 
-Earlier milestones: P6a doors/lifts/floors/ceilings/teleports/switches (`v0.13`),
+Earlier milestones: P6a doors/lifts/floors/ceilings/teleports/switches,
 P5b combat + HUD, P5a thinkers/mobj physics, P4 sprites, P3.5 fixed-point collision,
 P3.5d render-coverage/texture-orientation fixes, P3c BLOCKMAP collision, P3b
 visplanes, P3a textures, P2b BSP, P2a map loading, P1 WAD, P0 foundation. The
@@ -95,15 +96,15 @@ code; a documented permanent deviation — collision/play code is 16.16 fixed-po
 - [x] P4 精灵 (SpriteCache, projection, masked draw, rotation/mirror)
 - [x] P5a 思考者/mobj 系统（活对象 + 物理 + 抛桶）
 - [x] P3.5d 渲染覆盖修复 (upper-wall condition, V orientation, plane-band gaps)
-- [x] P5b 战斗 + HUD (weapon state machine, hitscan/projectiles, damage, pickups, STBAR) — `v0.12`
-- [x] P6a 关卡机关 (doors/lifts/floors/ceilings/teleports/switches, use/walk triggers, slide) — `v0.13`
+- [x] P5b 战斗 + HUD (weapon state machine, hitscan/projectiles, damage, pickups, STBAR)
+- [x] P6a 关卡机关 (doors/lifts/floors/ceilings/teleports/switches, use/walk triggers, slide)
 - [x] P6b 敌人 AI (sight/look/chase, all DOOM 1 monsters, attacks, infighting, boss deaths, monster doors)
-- [x] P7 流程 + 音频 + 存档 (campaign sequencing, intermission, SFX + MIDI music, quick save/load) — `v0.14`
+- [x] P7 流程 + 音频 + 存档 (campaign sequencing, intermission, SFX + MIDI music, quick save/load)
 - [x] P8 correctness sweep (render coverage / clipping / asset audits, sprite occlusion by
       planes, support height, crushers, other-side teleports, missing items and power-ups,
-      hazard floors, sector lights, sky texture) — `v0.15`
+      hazard floors, sector lights, sky texture)
 - [x] P9 后面关卡 (single special dispatch table, specials 61/112, reachability +
-      goal-directed solve diagnostics kept informational) — `v0.16`
+      goal-directed solve diagnostics kept informational)
 
 ## Build (Windows)
 
