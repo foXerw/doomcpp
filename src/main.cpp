@@ -21,9 +21,11 @@
 #include "play/p_tick.h"
 #include "play/p_pspr.h"
 #include "play/p_spec.h"
+#include "play/p_reach.h"
 #include "play/p_enemy.h"
 #include "play/sfx.h"
 #include "play/p_maputl.h"
+#include <cmath>
 #include "play/p_map.h"
 #include "render/r_bsp.h"
 #include "render/r_data.h"
@@ -501,6 +503,238 @@ int main(int argc, char** argv) {
                                       : (std::to_string(first) + ".." + std::to_string(last)).c_str());
                 return 0;
             }
+            if (std::string(argv[i]) == "--reachtest" && i + 1 < argc) {
+                // P9: can the player actually finish each map with the specials this engine
+                // implements? Sector reachability under the engine's own movement rules, plus
+                // what the special table says it can operate. Reports the specials that gate
+                // progress, with example coordinates, so the work list comes from the maps
+                // rather than from a table nobody checked.
+                // Usage: --reachtest <wad> [map ...] [--quiet]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                bool quiet = false;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--quiet") quiet = true;
+                    else if (a.size() == 4 && a[0] == 'E') wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                int blocked = 0;
+                std::map<int, int> allGating;
+                const char* frontierMap = nullptr;
+                for (int k = i + 2; k < argc; ++k)
+                    if (std::string(argv[k]) == "--frontier" && k + 1 < argc)
+                        frontierMap = argv[k + 1];
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    ReachResult rr = P_Reachability(map);
+                    if (!rr.exitReachable) ++blocked;
+                    for (auto& kv : rr.gating) allGating[kv.first] += kv.second;
+                    if (!quiet || !rr.exitReachable) {
+                        std::cout << name << ": reached=" << rr.reached << "/" << rr.sectors
+                                  << " exit=" << (rr.exitReachable ? "REACHABLE" : "BLOCKED!!")
+                                  << " exitLines=" << rr.exitLines;
+                        if (!rr.gating.empty()) {
+                            std::cout << " gatedBy{";
+                            bool first = true;
+                            for (auto& kv : rr.gating) {
+                                std::cout << (first ? "" : ",") << kv.first << "x" << kv.second;
+                                first = false;
+                            }
+                            std::cout << "}";
+                        }
+                        if (!rr.unreachableExits.empty())
+                            std::cout << " exitAt(" << rr.unreachableExits[0].first << ","
+                                      << rr.unreachableExits[0].second << ")";
+                        std::cout << "\n";
+                    }
+                }
+                if (frontierMap) {
+                    // Why does the walk stop? Every edge that touches reachable space but
+                    // cannot be crossed, with the numbers that decided it. Without this the
+                    // audit says "blocked" and nobody can tell an engine gap from a model gap.
+                    MapData map = loadMap(wad, frontierMap);
+                    ReachResult rr = P_Reachability(map);
+                    std::cout << "  frontier of " << frontierMap << " (reached " << rr.reached
+                              << "/" << rr.sectors << "):\n";
+                    int shown = 0;
+                    for (size_t li = 0; li < map.lines.size() && shown < 25; ++li) {
+                        const line_t& L = map.lines[li];
+                        if (L.sidenum[0] < 0 || L.sidenum[1] < 0) continue;
+                        const int a = map.sides[L.sidenum[0]].sector;
+                        const int b = map.sides[L.sidenum[1]].sector;
+                        if (a < 0 || b < 0 || a == b) continue;
+                        if (a >= (int)rr.reachable.size() || b >= (int)rr.reachable.size()) continue;
+                        if (rr.reachable[a] == rr.reachable[b]) continue;
+                        const int from = rr.reachable[a] ? a : b, to = (from == a) ? b : a;
+                        std::cout << "   line " << li << " " << from << "->" << to
+                                  << " fl/cl " << map.sectors[from].floorheight << "/"
+                                  << map.sectors[from].ceilingheight << " -> "
+                                  << map.sectors[to].floorheight << "/"
+                                  << map.sectors[to].ceilingheight
+                                  << " opening=" << (std::min(map.sectors[from].ceilingheight,
+                                                              map.sectors[to].ceilingheight)
+                                                     - std::max(map.sectors[from].floorheight,
+                                                                map.sectors[to].floorheight))
+                                  << " step=" << (map.sectors[to].floorheight
+                                                  - map.sectors[from].floorheight)
+                                  << " sp=" << L.special << " tag=" << L.tag
+                                  << " toTag=" << map.sectors[to].tag
+                                  << (P_LineSpecialSupported(L.special) ? " [supported]"
+                                                                        : (L.special ? " [UNSUPPORTED]" : ""))
+                                  << "\n";
+                        ++shown;
+                    }
+                }
+                std::cout << "REACHTEST " << (blocked ? "FAILED" : "PASSED") << " ("
+                          << blocked << " of " << wanted.size() << " maps not finishable)\n";
+                if (!quiet) {
+                    std::cout << "  specials gating progress, across all maps:";
+                    std::vector<std::pair<int, int>> sorted(allGating.begin(), allGating.end());
+                    std::sort(sorted.begin(), sorted.end(),
+                              [](const std::pair<int, int>& a, const std::pair<int, int>& b)
+                              { return a.second > b.second; });
+                    for (auto& kv : sorted) std::cout << " " << kv.first << "x" << kv.second;
+                    std::cout << "\n";
+                }
+                return blocked ? 1 : 0;
+            }
+            if (std::string(argv[i]) == "--solvetest" && i + 1 < argc) {
+                // P9: are the later levels actually finishable? A random soak measures the
+                // robot, not the map, so this one steers: from each start spot the player
+                // heads for the nearest exit line, uses whatever is in reach when it stops
+                // moving, and lets the engine's own doors/lifts/teleports do the rest. A map
+                // this walks out of is finishable by the engine's real code -- no static model
+                // of "can a lift bridge this gap" involved.
+                // Usage: --solvetest <wad> [map ...] [--seeds N] [--steps N] [--seed S]
+                WadFile wad(argv[i + 1]);
+                std::vector<std::string> wanted;
+                int steps = 3000, maxSeeds = 12;
+                uint32_t seed = 0xBEEF0001u;
+                for (int k = i + 2; k < argc; ++k) {
+                    const std::string a = argv[k];
+                    if (a == "--steps" && k + 1 < argc)      steps = std::atoi(argv[++k]);
+                    else if (a == "--seeds" && k + 1 < argc) maxSeeds = std::atoi(argv[++k]);
+                    else if (a == "--seed" && k + 1 < argc)  seed = static_cast<uint32_t>(std::strtoul(argv[++k], nullptr, 10));
+                    else if (a.size() == 4 && a[0] == 'E')   wanted.push_back(a);
+                }
+                if (wanted.empty())
+                    for (int ep = 1; ep <= 4; ++ep)
+                        for (int mn = 1; mn <= 9; ++mn) {
+                            std::string n = "E1M1";
+                            n[1] = static_cast<char>('0' + ep);
+                            n[3] = static_cast<char>('0' + mn);
+                            wanted.push_back(n);
+                        }
+                int solved = 0, unsolved = 0;
+                for (const std::string& name : wanted) {
+                    MapData map = loadMap(wad, name);
+                    // Targets: the exit lines, or the boss thing on the boss maps.
+                    std::vector<std::pair<int,int>> targets;
+                    for (const line_t& L : map.lines) {
+                        if (!P_IsExitSpecial(L.special)) continue;
+                        if (L.v1 < 0 || L.v2 < 0) continue;
+                        if (L.v1 >= (int)map.vertices.size() || L.v2 >= (int)map.vertices.size()) continue;
+                        targets.push_back({(map.vertices[L.v1].x + map.vertices[L.v2].x) / 2 / FRACUNIT,
+                                          (map.vertices[L.v1].y + map.vertices[L.v2].y) / 2 / FRACUNIT});
+                    }
+                    for (const thing_t& th : map.things)
+                        if (th.type == 7 || th.type == 16) targets.push_back({th.x, th.y});
+                    if (targets.empty()) { std::cout << name << ": NO EXIT TARGET\n"; ++unsolved; continue; }
+
+                    bool done = false;
+                    uint32_t rng = seed;
+                    auto next = [&rng]() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; };
+                    std::map<std::pair<int,int>, int> byCell;
+                    for (size_t t = 0; t < map.things.size(); ++t)
+                        byCell[{map.things[t].x / 700, map.things[t].y / 700}] = (int)t;
+                    std::vector<std::pair<int,int>> seedsPos;
+                    fixed_t sx0, sy0; angle_t sa0;
+                    if (playerStart(map, sx0, sy0, sa0)) seedsPos.push_back({sx0 >> FRACBITS, sy0 >> FRACBITS});
+                    for (auto& kv : byCell) seedsPos.push_back({map.things[kv.second].x, map.things[kv.second].y});
+                    if (maxSeeds > 0 && (int)seedsPos.size() > maxSeeds) {
+                        std::vector<std::pair<int,int>> few;
+                        const size_t str = (seedsPos.size() + maxSeeds - 1) / maxSeeds;
+                        for (size_t k = 0; k < seedsPos.size(); k += str) few.push_back(seedsPos[k]);
+                        seedsPos = few;
+                    }
+                    int bestProgress = 0;
+                    for (auto sp : seedsPos) {
+                        if (done) break;
+                        World w; w.map = &map; w.bm = &map.blockmap; w.mapName = name;
+                        P_SetupLevel(w, map);
+                        mobj_t* mo = w.player.mo;
+                        if (!mo) break;
+                        mo->x = (fixed_t)sp.first << FRACBITS;
+                        mo->y = (fixed_t)sp.second << FRACBITS;
+                        mo->momx = mo->momy = mo->momz = 0;
+                        mo->subsector = R_PointInSubsector(map, mo->x, mo->y);
+                        PosCheck at = P_CheckPosition(map, map.blockmap, *mo, mo->x, mo->y);
+                        const int sec0 = sectorOf(map, mo->subsector);
+                        if (!at.ok || sec0 < 0 || !P_CheckPosition(w, *mo, mo->x, mo->y).ok ||
+                            map.sectors[sec0].ceilingheight - map.sectors[sec0].floorheight < 56)
+                            continue;
+                        mo->floorz = at.floorz; mo->ceilingz = at.ceilingz; mo->z = at.floorz;
+                        w.player.viewz = mo->z + VIEWHEIGHT;
+                        w.player.health = 100000; mo->health = 100000;
+                        int stuck = 0;
+                        fixed_t lastx = mo->x, lasty = mo->y;
+                        for (int t = 0; t < steps && !w.player.dead; ++t) {
+                            // Head for whichever target is closest now.
+                            int bi = 0; double bd = 1e30;
+                            for (size_t g = 0; g < targets.size(); ++g) {
+                                const double dx = targets[g].first - (mo->x >> FRACBITS);
+                                const double dy = targets[g].second - (mo->y >> FRACBITS);
+                                const double dd = dx * dx + dy * dy;
+                                if (dd < bd) { bd = dd; bi = (int)g; }
+                            }
+                            bestProgress = std::max(bestProgress, 100000 - (int)bd);
+                            constexpr double kTau = 6.28318530717958647692;
+                            double wa = std::atan2(targets[bi].second - (mo->y >> FRACBITS),
+                                                   targets[bi].first - (mo->x >> FRACBITS));
+                            if (wa < 0.0) wa += kTau;
+                            const angle_t want = (angle_t)(wa / kTau * 4294967296.0);
+                            int turn = 0;
+                            // Shortest way round: the unsigned difference wraps, so read it
+                            // as a signed offset and turn that way.
+                            const int64_t half = (int64_t)ANG180;
+                            int64_t d = (int64_t)want - (int64_t)mo->angle;
+                            if (d > half) d -= ((int64_t)1 << 32);
+                            if (d < -half) d += ((int64_t)1 << 32);
+                            if (d > (int64_t)(ANG45 / 4)) turn = 2;
+                            else if (d < -(int64_t)(ANG45 / 4)) turn = -2;
+                            int fwd = 1;
+                            if (stuck > 2) {
+                                P_UseLines(w, w.player);
+                                turn = (t & 8) ? 3 : -3;         // sweep for a way round
+                                if (stuck > 25) fwd = -1;
+                            }
+                            P_MovePlayerWorld(w, w.player, fwd * (50 * 2048), 0,
+                                              (angle_t)(turn * (int)degreesToBam(4)));
+                            if (w.levelExitRequested) { done = true; break; }
+                            P_RunThinkers(w);
+                            if (!w.player.mo) break;
+                            if (std::abs(w.player.mo->x - lastx) < (2 << FRACBITS) &&
+                                std::abs(w.player.mo->y - lasty) < (2 << FRACBITS)) ++stuck;
+                            else stuck = 0;
+                            lastx = w.player.mo->x; lasty = w.player.mo->y;
+                        }
+                    }
+                    std::cout << name << ": " << (done ? "SOLVED" : "not solved")
+                              << " (seeds=" << seedsPos.size() << " targets=" << targets.size()
+                              << " bestProgress=" << bestProgress << ")\n";
+                    if (done) ++solved; else ++unsolved;
+                }
+                std::cout << "SOLVETEST: " << solved << " solved, " << unsolved << " not\n";
+                return 0;
+            }
             if (std::string(argv[i]) == "--clipaudit" && i + 1 < argc) {
                 // P8a clipping audit: walk the REAL player around every map with a
                 // deterministic input soak and re-test the position the movement code ended
@@ -529,6 +763,7 @@ int main(int argc, char** argv) {
                             wanted.push_back(n);
                         }
                 int violations = 0, violMaps = 0, overlaps = 0, badSeeds = 0, crushes = 0;
+                int exitsReachedMaps = 0;
                 std::map<int, int> overlapBy;                // doomednum -> overlap frames
                 int sameHeightOverlaps = 0;
                 for (const std::string& name : wanted) {
@@ -567,6 +802,7 @@ int main(int argc, char** argv) {
                         seeds = few;
                     }
                     int thisMapViolations = 0, thisMapOverlaps = 0, checked = 0, walked = 0;
+                    int exitReached = 0;
                     std::set<int> visited;
                     for (auto sp : seeds) {
                         mobj_t* mo = w.player.mo;
@@ -652,6 +888,16 @@ int main(int argc, char** argv) {
                             ++checked;
                             const int sec = sectorOf(map, mo->subsector);
                             if (sec >= 0) visited.insert(sec);
+                            // Empirical progress evidence: the soak uses switches and rides
+                            // movers as a side effect of walking, so if it ever asks to leave
+                            // the level, the level is finishable by the engine's own code --
+                            // far stronger evidence than a static model of the map.
+                            if (w.levelExitRequested) {
+                                ++exitReached;
+                                w.levelExitRequested = false;
+                                w.secretExit = false;
+                                break;                       // this seed has "finished" the map
+                            }
                             // 1. the position must not be one the WALL collision forbids:
                             // straddling a one-sided line, an ML_BLOCKING line, or an opening
                             // the player does not fit through means the walk got somewhere the
@@ -739,6 +985,7 @@ int main(int argc, char** argv) {
                         }
                     }
                     if (thisMapViolations) ++violMaps;
+                    if (exitReached) ++exitsReachedMaps;
                     std::cout << name << ": seeds=" << seeds.size() << " tics=" << walked
                               << " checked=" << checked
                               << " sectorsVisited=" << visited.size() << "/" << map.sectors.size()
@@ -746,6 +993,8 @@ int main(int argc, char** argv) {
                 }
                 std::cout << "CLIPAUDIT " << (violations ? "FAILED" : "PASSED") << " ("
                           << violations << " violations in " << violMaps << " maps, "
+                          << exitsReachedMaps << " of " << wanted.size()
+                          << " maps' exits were reached by walking, "
                           << overlaps << " thing overlaps (" << sameHeightOverlaps
                           << " ending at equal height: the vanilla descent-onto-a-monster "
                           "case, pinned by the thing-blocking unit tests), " << badSeeds

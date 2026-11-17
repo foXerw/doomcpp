@@ -31,6 +31,7 @@ add_library(doomcore STATIC
     src/play/p_inter.cpp
     src/play/p_enemy.cpp
     src/play/p_spec.cpp
+    src/play/p_reach.cpp
     src/play/g_game.cpp
     src/play/sfx.cpp
     src/play/g_save.cpp
