@@ -102,6 +102,8 @@ code; a documented permanent deviation — collision/play code is 16.16 fixed-po
 - [x] P8 correctness sweep (render coverage / clipping / asset audits, sprite occlusion by
       planes, support height, crushers, other-side teleports, missing items and power-ups,
       hazard floors, sector lights, sky texture) — `v0.15`
+- [x] P9 后面关卡 (single special dispatch table, specials 61/112, reachability +
+      goal-directed solve diagnostics kept informational) — `v0.16`
 
 ## Build (Windows)
 
@@ -165,6 +167,14 @@ ctest --test-dir build --build-config Release --output-on-failure
 ./build/Release/doomcpp.exe --dumppatch assets/freedoom1.wad STBAR out.bmp
 ```
 
+## The book
+
+[`docs/guide/`](docs/guide/00-目录.md) holds a 17-chapter implementation guide written
+from this project: how each subsystem actually works, why it is built that way, and what
+each choice gives up. It is written to be read without this repository — pseudocode and
+reasoning first — but every claim was paid for by a real rework here. Start at
+[00-目录.md](docs/guide/00-目录.md); chapter 16 (验证方法论) is the load-bearing one.
+
 ## Assets
 
 The engine reads standard WAD files. For development/testing use
