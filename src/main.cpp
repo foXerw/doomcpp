@@ -504,12 +504,18 @@ int main(int argc, char** argv) {
                 return 0;
             }
             if (std::string(argv[i]) == "--reachtest" && i + 1 < argc) {
-                // P9: can the player actually finish each map with the specials this engine
-                // implements? Sector reachability under the engine's own movement rules, plus
-                // what the special table says it can operate. Reports the specials that gate
-                // progress, with example coordinates, so the work list comes from the maps
-                // rather than from a table nobody checked.
-                // Usage: --reachtest <wad> [map ...] [--quiet]
+                // P9: which lines does the engine not know how to operate? Sector
+                // reachability under the engine's own movement rules plus the special table,
+                // reported as a work list with example coordinates.
+                //
+                // Deliberately NOT a CTest gate. A static walk cannot prove a level
+                // finishable: it does not model riding a lift that only meets a ledge
+                // partway, a key guarded by monsters, or a switch whose door is three rooms
+                // away, and it reports 15 maps "blocked" whose frontier edges carry no
+                // unsupported special at all -- model gaps, not engine gaps. Read the gating
+                // list as "specials worth implementing" and nothing more; --frontier <map>
+                // shows the edges that stopped the walk, which is how you tell the difference.
+                // Usage: --reachtest <wad> [map ...] [--quiet] [--frontier <map>]
                 WadFile wad(argv[i + 1]);
                 std::vector<std::string> wanted;
                 bool quiet = false;
@@ -607,12 +613,15 @@ int main(int argc, char** argv) {
                 return blocked ? 1 : 0;
             }
             if (std::string(argv[i]) == "--solvetest" && i + 1 < argc) {
-                // P9: are the later levels actually finishable? A random soak measures the
-                // robot, not the map, so this one steers: from each start spot the player
-                // heads for the nearest exit line, uses whatever is in reach when it stops
-                // moving, and lets the engine's own doors/lifts/teleports do the rest. A map
-                // this walks out of is finishable by the engine's real code -- no static model
-                // of "can a lift bridge this gap" involved.
+                // P9: goal-directed soak -- steer to the nearest exit line, use whatever is
+                // in reach when the walk stops, and let the engine's own doors/lifts/teleports
+                // do the rest.
+                //
+                // Also informational, not a gate: greedy walking does not solve DOOM levels.
+                // It gets 7 of 36, and the misses are mostly the robot failing to find the
+                // route rather than the route being missing. It is useful in exactly one
+                // direction: a map this solves is provably finishable by real engine code,
+                // because every step went through P_TryMove, P_UseLines and P_RunThinkers.
                 // Usage: --solvetest <wad> [map ...] [--seeds N] [--steps N] [--seed S]
                 WadFile wad(argv[i + 1]);
                 std::vector<std::string> wanted;

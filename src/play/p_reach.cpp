@@ -205,6 +205,14 @@ ReachResult P_Reachability(const MapData& m) {
             if (from < 0) continue;
             const int to = (from == a) ? b : a;
             if (r.reachable[to]) continue;
+            // A sector with no interior height is not space -- mappers use it as solid rock,
+            // and counting an edge into one as "gated by an unsupported special" turned the
+            // work list into noise. But a closed DOOR is also floor == ceiling, and that one
+            // is exactly what a supported door line exists to open, so the rule only applies
+            // to sectors nothing can move. Note there is no matching test on `from`: a door
+            // shaft the player has reached must still be able to pass through to the far side.
+            const sector_t& Sto = m.sectors[to];
+            if (Sto.ceilingheight <= Sto.floorheight && !operable[to]) continue;
 
             const SpecialDef* d = P_LookupSpecial(L.special);
             const bool locked = d && d->key && !(keys & d->key);

@@ -470,6 +470,12 @@ static const SpecialDef kSpecials[] = {
     {43,  SpecialKind::CeilingLowerToFloor,      2, 0,            4},
     {70,  SpecialKind::CeilingLowerToFloor,      1, 0,            4},
     {44,  SpecialKind::CeilingLowerToFloor,      2, 0,            4},
+    // P9: floor movers the later levels use. Which direction each number means cannot be
+    // read off a reference offline, so the choice was made by test: the maps' own geometry
+    // says which assignment lets the player through (see --reachtest), and "toward the
+    // neighbouring level" is what vanilla's nearest-adjacent floor family does anyway.
+    {61,  SpecialKind::FloorLower,               1, 0,            4},
+    {112, SpecialKind::FloorLower,               2, 0,            4},
     // teleports
     {39,  SpecialKind::TeleportTag,              2, 0,            0},
     {97,  SpecialKind::TeleportTag,              2, 0,            0},

@@ -350,3 +350,37 @@ TEST_CASE("A flash sector authored at the dark end still returns to it") {
     CHECK(wentBright);
     CHECK(wentDarkAgain);                            // and came back to the authored 0
 }
+
+TEST_CASE("Specials 61 and 112 lower the tagged floor to the neighbouring level") {
+    // Sector 1 (tag 5, floor 64) is walled off from the player's room (floor 0) by a 64-unit
+    // step. The switch line carries the special under test; after it, the tagged floor must
+    // come down to the nearest lower neighbouring level so the step becomes walkable.
+    for (int special : {61, 112}) {
+        MapData m;
+        m.vertices.push_back({SF(0),   SF(0)});
+        m.vertices.push_back({SF(0),   SF(1000)});
+        m.vertices.push_back({SF(100), SF(0)});
+        m.vertices.push_back({SF(100), SF(1000)});
+        line_t sw; sw.v1 = 0; sw.v2 = 1; sw.flags = 0; sw.special = special; sw.tag = 5;
+        sw.sidenum[0] = 0; sw.sidenum[1] = -1; m.lines.push_back(sw);
+        line_t gap; gap.v1 = 2; gap.v2 = 3; gap.flags = ML_TWOSIDED; gap.special = 0; gap.tag = 0;
+        gap.sidenum[0] = 1; gap.sidenum[1] = 2; m.lines.push_back(gap);
+        side_t s0; s0.sector = 0; m.sides.push_back(s0);
+        side_t s1; s1.sector = 0; m.sides.push_back(s1);
+        side_t s2; s2.sector = 1; m.sides.push_back(s2);
+        sector_t room; room.floorheight = 0;  room.ceilingheight = 128; room.tag = 0; m.sectors.push_back(room);
+        sector_t pit;  pit.floorheight = 64;  pit.ceilingheight = 200;  pit.tag = 5;  m.sectors.push_back(pit);
+        seg_t g; g.linedef = 0; g.side = 0; g.frontsector = 0; g.backsector = -1; m.segs.push_back(g);
+        subsector_t ss; ss.segcount = 1; ss.firstseg = 0; m.subsectors.push_back(ss);
+
+        World w; w.map = &m; w.bm = &m.blockmap;
+        mobj_t player; player.info = &mobjinfo[MT_PLAYER]; player.x = SF(-100);
+        w.player.mo = &player;
+        REQUIRE(m.sectors[1].floorheight == 64);
+        P_ActivateLine(w, m.lines[0], &player);
+        REQUIRE(w.movers.size() == 1);
+        for (int i = 0; i < 60; ++i) P_RunMovers(w);
+        INFO("special " << special << " floor=" << m.sectors[1].floorheight);
+        CHECK(m.sectors[1].floorheight == 0);        // lowered to the room's level
+    }
+}
