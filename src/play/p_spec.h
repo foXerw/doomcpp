@@ -30,3 +30,42 @@ bool P_SectorHasMover(const World& w, int sector);
 // P6b boss death: lower every sector with the given tag to its next lower floor
 // (vanilla A_BossDeath special 666 handling).
 void P_LowerFloorByTag(World& w, int tag);
+// ---- P9: one data table is the single source of truth about supported specials ----
+//
+// Every linedef special doomcpp supports is described once here: how it is triggered,
+// whether it needs a key, what it does, and with what speed. P_ActivateLine dispatches on
+// this table, and the reachability audit asks the same table "can the engine operate this
+// line?" -- so the list of what is implemented cannot drift away from what the code does,
+// and the list of what is NOT implemented is trustworthy enough to plan work from.
+enum class SpecialKind {
+    None,                       // not a special this engine knows
+    DoorOpenClose,              // open, wait, close again
+    DoorOpenStay,               // open and stay open
+    DoorClose,
+    Plat,                       // floor down, wait, back up
+    FloorRaise,                 // floor to a neighbouring level
+    FloorLower,
+    Stairs,                     // stepped floors (simplified: one step per tagged sector)
+    CeilingRaiseToNeighbours,
+    CeilingLowerToFloor,
+    TeleportTag,                // jump to a landing thing in the tag-matched sector
+    TeleportOther,              // jump to a landing thing behind this line
+    ExitNormal,
+    ExitSecret,
+};
+
+struct SpecialDef {
+    int special;
+    SpecialKind kind;
+    int trigger;                // bitmask: 1 = usable, 2 = triggered by crossing
+    int key;                    // KEY_BLUE/YELLOW/RED, or 0 when unlocked
+    int speed;                  // map units per tic for movers
+};
+
+// nullptr when the special number is unknown to this engine.
+const SpecialDef* P_LookupSpecial(int special);
+bool P_LineSpecialSupported(int special);
+// The exit specials, for the campaign-flow code and the audits.
+bool P_IsExitSpecial(int special);
+bool P_IsSecretExitSpecial(int special);
+

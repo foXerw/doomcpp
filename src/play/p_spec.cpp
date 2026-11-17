@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 
 namespace {
 
@@ -153,37 +154,13 @@ void forTaggedSectors(const MapData& m, int tag, Fn fn) {
         if (m.sectors[i].tag == tag) fn(i);
 }
 
-int keyForSpecial(int special) {
-    switch (special) {
-    case 26: case 32: case 133: return KEY_BLUE;
-    case 27: case 33: case 137: return KEY_YELLOW;
-    case 28: case 34: case 135: return KEY_RED;
-    default: return 0;
-    }
-}
 
-// Bitmask: 1 = usable (Space within reach), 2 = triggered by crossing. A teleport line
-// can be both: in the IWAD some 125/126 lines are buttons set in a wall (the opening is
-// blocked) and some are pads you walk onto.
+// Trigger style comes from the special table: 1 = usable (Space within reach),
+// 2 = triggered by crossing, 3 = both. A teleport line is authored as a wall button in some
+// maps and as a floor pad you walk onto in others, so it needs both.
 int triggerFor(int special) {
-    switch (special) {
-    case 1: case 26: case 27: case 28: case 31: case 32: case 33: case 34:
-    case 62: case 63: case 64: case 90: case 91: case 103:
-    case 117: case 118: case 133: case 135: case 137:
-    case 11: case 51:
-    case 23: case 55: case 66: case 67: case 69: case 70: case 71: case 72:
-    case 101: case 102: case 41:
-        return 1;
-    case 2: case 3: case 4: case 7: case 8: case 19: case 38:
-    case 39: case 40: case 43: case 44: case 52: case 124:
-    case 58: case 82: case 88: case 92: case 97:
-    case 100: case 119: case 120: case 127: case 130: case 131:
-        return 2;
-    case 125: case 126:            // teleport to the other side of this line
-        return 1 | 2;
-    default:
-        return 0;
-    }
+    const SpecialDef* d = P_LookupSpecial(special);
+    return d ? d->trigger : 0;
 }
 
 bool swapSwitchTextures(MapData& m, const line_t& L) {
@@ -433,15 +410,102 @@ void P_RunMovers(World& w) {
     }
 }
 
+// ---- P9: the special table (see p_spec.h) ----
+//
+// One row per linedef special this engine can act on. P_ActivateLine dispatches on the
+// kind, and the reachability audit reads the same rows to decide "can the player get
+// through this line", so the list of supported specials cannot drift from the code.
+// Parameters are what the previous switch used, unchanged.
+static const SpecialDef kSpecials[] = {
+    // doors that open, wait and close again
+    {1,   SpecialKind::DoorOpenClose,            1, 0,            2},
+    {4,   SpecialKind::DoorOpenClose,            2, 0,            2},
+    {26,  SpecialKind::DoorOpenClose,            1, KEY_BLUE,     2},
+    {27,  SpecialKind::DoorOpenClose,            1, KEY_YELLOW,   2},
+    {28,  SpecialKind::DoorOpenClose,            1, KEY_RED,      2},
+    {90,  SpecialKind::DoorOpenClose,            1, 0,            2},
+    {117, SpecialKind::DoorOpenClose,            1, 0,            4},
+    // doors that open and stay open
+    {2,   SpecialKind::DoorOpenStay,             2, 0,            2},
+    {31,  SpecialKind::DoorOpenStay,             1, 0,            2},
+    {32,  SpecialKind::DoorOpenStay,             1, KEY_BLUE,     2},
+    {33,  SpecialKind::DoorOpenStay,             1, KEY_YELLOW,   2},
+    {34,  SpecialKind::DoorOpenStay,             1, KEY_RED,      2},
+    {63,  SpecialKind::DoorOpenStay,             1, 0,            2},
+    {64,  SpecialKind::DoorOpenStay,             1, 0,            2},
+    {91,  SpecialKind::DoorOpenStay,             1, 0,            2},
+    {103, SpecialKind::DoorOpenStay,             1, 0,            2},
+    {118, SpecialKind::DoorOpenStay,             1, 0,            4},
+    {133, SpecialKind::DoorOpenStay,             1, KEY_BLUE,     2},
+    {135, SpecialKind::DoorOpenStay,             1, KEY_RED,      2},
+    {137, SpecialKind::DoorOpenStay,             1, KEY_YELLOW,   2},
+    {3,   SpecialKind::DoorClose,                2, 0,            2},
+    // plats and floors
+    {62,  SpecialKind::Plat,                     1, 0,            4},
+    {88,  SpecialKind::Plat,                     2, 0,            4},
+    {120, SpecialKind::Plat,                     2, 0,            4},
+    {58,  SpecialKind::FloorRaise,               2, 0,            4},
+    {92,  SpecialKind::FloorRaise,               2, 0,            4},
+    {119, SpecialKind::FloorRaise,               2, 0,            8},
+    {130, SpecialKind::FloorRaise,               2, 0,            8},
+    {131, SpecialKind::FloorRaise,               2, 0,            8},
+    {66,  SpecialKind::FloorRaise,               1, 0,            4},
+    {71,  SpecialKind::FloorRaise,               1, 0,            4},
+    {55,  SpecialKind::FloorRaise,               1, 0,            4},
+    {101, SpecialKind::FloorRaise,               1, 0,            4},
+    {102, SpecialKind::FloorRaise,               1, 0,            4},
+    {23,  SpecialKind::FloorLower,               1, 0,            4},
+    {82,  SpecialKind::FloorLower,               2, 0,            4},
+    {38,  SpecialKind::FloorLower,               2, 0,            4},
+    {19,  SpecialKind::FloorLower,               2, 0,            4},
+    {67,  SpecialKind::FloorLower,               1, 0,            4},
+    {7,   SpecialKind::Stairs,                   2, 0,            4},
+    {8,   SpecialKind::Stairs,                   2, 0,            4},
+    {100, SpecialKind::Stairs,                   2, 0,            4},
+    {127, SpecialKind::Stairs,                   2, 0,            4},
+    {40,  SpecialKind::CeilingRaiseToNeighbours, 2, 0,            4},
+    {69,  SpecialKind::CeilingRaiseToNeighbours, 1, 0,            4},
+    {72,  SpecialKind::CeilingRaiseToNeighbours, 1, 0,            4},
+    {41,  SpecialKind::CeilingLowerToFloor,      1, 0,            4},
+    {43,  SpecialKind::CeilingLowerToFloor,      2, 0,            4},
+    {70,  SpecialKind::CeilingLowerToFloor,      1, 0,            4},
+    {44,  SpecialKind::CeilingLowerToFloor,      2, 0,            4},
+    // teleports
+    {39,  SpecialKind::TeleportTag,              2, 0,            0},
+    {97,  SpecialKind::TeleportTag,              2, 0,            0},
+    {125, SpecialKind::TeleportOther,            3, 0,            0},
+    {126, SpecialKind::TeleportOther,            3, 0,            0},
+    // level exits
+    {11,  SpecialKind::ExitNormal,               1, 0,            0},
+    {52,  SpecialKind::ExitNormal,               2, 0,            0},
+    {51,  SpecialKind::ExitSecret,               1, 0,            0},
+    {124, SpecialKind::ExitSecret,               2, 0,            0},
+};
+
+const SpecialDef* P_LookupSpecial(int special) {
+    for (const SpecialDef& s : kSpecials) if (s.special == special) return &s;
+    return nullptr;
+}
+bool P_LineSpecialSupported(int special) { return P_LookupSpecial(special) != nullptr; }
+bool P_IsExitSpecial(int special) {
+    const SpecialDef* s = P_LookupSpecial(special);
+    return s && (s->kind == SpecialKind::ExitNormal || s->kind == SpecialKind::ExitSecret);
+}
+bool P_IsSecretExitSpecial(int special) {
+    const SpecialDef* s = P_LookupSpecial(special);
+    return s && s->kind == SpecialKind::ExitSecret;
+}
+
 void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
     if (!w.map) return;
-    const int key = keyForSpecial(L.special);
-    if (key && who == w.player.mo && !(w.player.keys & key)) {
+    const SpecialDef* def = P_LookupSpecial(L.special);
+    if (!def) return;
+    if (def->key && who == w.player.mo && !(w.player.keys & def->key)) {
         I_StartSound(SFX_NOWAY);
         return;   // locked
     }
 
-    if ((triggerFor(L.special) & 1) && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
+    if ((def->trigger & 1) && swapSwitchTextures(*w.map, const_cast<line_t&>(L)))
         I_StartSound(SFX_SWTCHN);
 
     const int front = sideSector(*w.map, L, 0);
@@ -463,119 +527,82 @@ void P_ActivateLine(World& w, const line_t& L, mobj_t* who) {
         const bool onFront = cross < 0;          // front side = right of v1->v2
         doorSec = onFront ? back : front;
     }
-    auto doorAt = [&](int sec, bool stay, int speed) {
-        startDoor(w, sec, 150, stay, speed);
+
+    // Door lines act on the sector on the far side of the line when that is known, and on
+    // every sector carrying the tag otherwise. Everything else is tag-driven.
+    auto onSectors = [&](std::function<void(int)> fn) {
+        const bool door = def->kind == SpecialKind::DoorOpenClose ||
+                          def->kind == SpecialKind::DoorOpenStay  ||
+                          def->kind == SpecialKind::DoorClose;
+        if (door && doorSec >= 0) fn(doorSec);
+        else forTaggedSectors(*w.map, L.tag, fn);
     };
 
-    switch (L.special) {
-    // ---- doors ----
-    case 1: case 4: case 26: case 27: case 28: case 117: {
-        if (doorSec >= 0) doorAt(doorSec, false, L.special == 117 ? 4 : 2);
-        else forTaggedSectors(*w.map, L.tag, [&](int s){ doorAt(s, false, 2); });
+    switch (def->kind) {
+    case SpecialKind::DoorOpenClose:
+        onSectors([&](int s){ startDoor(w, s, 150, false, def->speed); });
         break;
-    }
-    case 2: {   // W1 door open (stay; already-open doors stay open)
-        auto openStay = [&](int sec) {
-            const sector_t& s = w.map->sectors[sec];
-            if (s.ceilingheight <= s.floorheight + 1) startDoor(w, sec, 0, true, 2);
-        };
-        if (doorSec >= 0) openStay(doorSec);
-        else forTaggedSectors(*w.map, L.tag, openStay);
-        break;
-    }
-    case 3: {   // W1 door close
-        auto closeAt = [&](int sec) {
-            if (w.map->sectors[sec].ceilingheight > w.map->sectors[sec].floorheight + 1)
-                startDoor(w, sec, 0, false, 2);
-        };
-        if (doorSec >= 0) closeAt(doorSec);
-        else forTaggedSectors(*w.map, L.tag, closeAt);
-        break;
-    }
-    case 31: case 32: case 33: case 34: case 118: case 63: case 64: case 91: case 103: {
-        auto openStay = [&](int sec) {
-            const sector_t& s = w.map->sectors[sec];
-            if (s.ceilingheight <= s.floorheight + 1)
-                startDoor(w, sec, 0, true, L.special == 118 ? 4 : 2);
-        };
-        if (doorSec >= 0) openStay(doorSec);
-        else forTaggedSectors(*w.map, L.tag, openStay);
-        break;
-    }
-    case 90: {
-        if (doorSec >= 0) doorAt(doorSec, false, 2);
-        else forTaggedSectors(*w.map, L.tag, [&](int s){ doorAt(s, false, 2); });
-        break;
-    }
-    // ---- lifts / platforms ----
-    case 62: case 88: case 120: {
-        forTaggedSectors(*w.map, L.tag, [&](int s){ startPlat(w, s, 4, 105); });
-        break;
-    }
-    // ---- floors (raise to lowest/highest neighbouring floor) ----
-    case 58: case 92: case 119: case 130: case 131: case 66: case 71:
-    case 55: case 101: case 102: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
-            int speed = (L.special == 119 || L.special == 130 || L.special == 131) ? 8 : 4;
-            startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorUp(*w.map, s), speed);
+    case SpecialKind::DoorOpenStay:
+        onSectors([&](int s){
+            const sector_t& sec = w.map->sectors[s];
+            if (sec.ceilingheight <= sec.floorheight + 1) startDoor(w, s, 0, true, def->speed);
         });
         break;
-    }
-    // ---- floors (lower to the next floor below) ----
-    case 23: case 82: case 38: case 19: case 67: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
-            startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorDown(*w.map, s), 4);
+    case SpecialKind::DoorClose:
+        onSectors([&](int s){
+            if (w.map->sectors[s].ceilingheight > w.map->sectors[s].floorheight + 1)
+                startDoor(w, s, 0, false, def->speed);
         });
         break;
-    }
-    // ---- stairs (simplified: raise each tagged sector by 8) ----
-    case 7: case 8: case 100: case 127: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
-            startFloorOrCeiling(w, s, MoverKind::Floor, w.map->sectors[s].floorheight + 8, 4);
+    case SpecialKind::Plat:
+        onSectors([&](int s){ startPlat(w, s, def->speed, 105); });
+        break;
+    case SpecialKind::FloorRaise:
+        onSectors([&](int s){
+            startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorUp(*w.map, s), def->speed);
         });
         break;
-    }
-    // ---- ceilings ----
-    case 40: case 69: case 72: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
+    case SpecialKind::FloorLower:
+        onSectors([&](int s){
+            startFloorOrCeiling(w, s, MoverKind::Floor, nextFloorDown(*w.map, s), def->speed);
+        });
+        break;
+    case SpecialKind::Stairs:
+        // Simplified (documented): one 8-unit step per tagged sector instead of vanilla's
+        // iterative stair builder that keeps claiming neighbouring sectors.
+        onSectors([&](int s){
+            startFloorOrCeiling(w, s, MoverKind::Floor,
+                                w.map->sectors[s].floorheight + 8, def->speed);
+        });
+        break;
+    case SpecialKind::CeilingRaiseToNeighbours:
+        onSectors([&](int s){
             Neighbors n = neighborHeights(*w.map, s);
-            startFloorOrCeiling(w, s, MoverKind::Ceiling, n.ceil - 4, 4);
+            startFloorOrCeiling(w, s, MoverKind::Ceiling, n.ceil - 4, def->speed);
         });
         break;
-    }
-    case 41: case 43: case 70: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
-            startFloorOrCeiling(w, s, MoverKind::Ceiling, w.map->sectors[s].floorheight, 4);
+    case SpecialKind::CeilingLowerToFloor:
+        onSectors([&](int s){
+            startFloorOrCeiling(w, s, MoverKind::Ceiling,
+                                w.map->sectors[s].floorheight, def->speed);
         });
         break;
-    }
-    case 44: {
-        forTaggedSectors(*w.map, L.tag, [&](int s) {
-            startFloorOrCeiling(w, s, MoverKind::Ceiling, w.map->sectors[s].floorheight, 4);
-        });
-        break;
-    }
-    // ---- teleport / exits ----
-    case 39: case 97:
+    case SpecialKind::TeleportTag:
         if (who) teleportPlayer(w, *who, L.tag);
         break;
-    case 125: case 126:
+    case SpecialKind::TeleportOther:
         if (who) teleportOtherSide(w, L, *who);
         break;
-    // ---- level exits (P7 campaign flow) ----
-    case 11: case 52:
-        w.levelExitRequested = true;
-        w.secretExit = false;
+    case SpecialKind::ExitNormal:
+        w.levelExitRequested = true; w.secretExit = false;
         break;
-    case 51: case 124:
-        w.levelExitRequested = true;
-        w.secretExit = true;
+    case SpecialKind::ExitSecret:
+        w.levelExitRequested = true; w.secretExit = true;
         break;
-    default:
+    case SpecialKind::None:
         break;
     }
 }
-
 void P_UseLines(World& w, player_t& p) {
     if (!w.map || !p.mo || p.dead) return;
     P_UseLines(w, *p.mo);
